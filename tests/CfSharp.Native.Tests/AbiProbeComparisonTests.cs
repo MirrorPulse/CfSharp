@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -115,6 +117,43 @@ public sealed class AbiProbeComparisonTests
         AssertProbe(probe, "cfPlaceholderInfoClassStandard", (int)CfPlaceholderInfoClass.Standard);
         AssertProbe(probe, "cfPlaceholderRangeInfoModified", (int)CfPlaceholderRangeInfoClass.Modified);
         AssertProbe(probe, "cfPlaceholderStatePartiallyOnDisk", (uint)CfPlaceholderState.PartiallyOnDisk);
+        AssertAllEnumValues(probe.GetProperty("enumValues"));
+    }
+
+    private static void AssertAllEnumValues(JsonElement nativeEnums)
+    {
+        string inventoryPath = Path.Combine(AppContext.BaseDirectory, "cfapi-coverage.json");
+        using JsonDocument inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
+        Assembly nativeAssembly = typeof(CfApi).Assembly;
+
+        foreach (JsonElement entry in inventory.RootElement.GetProperty("symbols").EnumerateArray())
+        {
+            if (entry.GetProperty("kind").GetString() != "enum")
+            {
+                continue;
+            }
+
+            string nativeName = entry.GetProperty("nativeName").GetString()!;
+            string managedName = entry.GetProperty("managedSymbol").GetString()!;
+            Type managedType = nativeAssembly.GetType(managedName, throwOnError: true)!;
+            FieldInfo[] managedFields = managedType
+                .GetFields(BindingFlags.Public | BindingFlags.Static)
+                .OrderBy(field => field.MetadataToken)
+                .ToArray();
+            JsonElement.ArrayEnumerator nativeValues = nativeEnums.GetProperty(nativeName).EnumerateArray();
+            long[] expectedValues = nativeValues.Select(value => value.GetInt64()).ToArray();
+
+            Assert.Equal(managedFields.Length, expectedValues.Length);
+            for (int index = 0; index < managedFields.Length; index++)
+            {
+                long managedValue = Convert.ToInt64(
+                    managedFields[index].GetValue(null),
+                    CultureInfo.InvariantCulture);
+                Assert.True(
+                    managedValue == expectedValues[index],
+                    $"{nativeName}.{managedFields[index].Name}: native {expectedValues[index]}, managed {managedValue}");
+            }
+        }
     }
 
     private static void AssertOffset<T>(

@@ -20,6 +20,14 @@ public sealed class AbiProbeComparisonTests
         JsonElement probe = document.RootElement;
 
         AssertProbe(probe, "pointerSize", IntPtr.Size);
+        AssertProbe(probe, "cfEndOfFile", CfApi.EndOfFile);
+        AssertProbe(probe, "cfDefaultRequestKey", CfApi.DefaultRequestKey);
+        AssertProbe(probe, "cfMaxFileIdentityLength", CfApi.MaxFileIdentityLength);
+        AssertProbe(probe, "cfMaxPriorityHint", CfApi.MaxPriorityHint);
+        AssertProbe(probe, "cfMaxProviderNameLength", CfApi.MaxProviderNameLength);
+        AssertProbe(probe, "cfMaxProviderVersionLength", CfApi.MaxProviderVersionLength);
+        AssertProbe(probe, "cfCallbackRegistrationEndType", (int)CfCallbackRegistration.End.Type);
+        AssertProbe(probe, "cfCallbackRegistrationEndCallbackNull", 1);
         AssertProbe(probe, "cfPlatformInfoSize", Marshal.SizeOf<CfPlatformInfo>());
         AssertOffset<CfPlatformInfo>(probe, "cfPlatformInfoBuildNumberOffset", nameof(CfPlatformInfo.BuildNumber));
         AssertOffset<CfPlatformInfo>(probe, "cfPlatformInfoRevisionNumberOffset", nameof(CfPlatformInfo.RevisionNumber));
@@ -54,6 +62,12 @@ public sealed class AbiProbeComparisonTests
         AssertProbe(probe, "cfInSyncPolicyTrackAll", (uint)CfInSyncPolicy.TrackAll);
         AssertProbe(probe, "cfSyncRootInfoProvider", (int)CfSyncRootInfoClass.Provider);
         AssertProbe(probe, "cfConnectionKeySize", Marshal.SizeOf<CfConnectionKey>());
+        AssertProbe(probe, "cfTransferKeySize", Marshal.SizeOf<CfTransferKey>());
+        AssertProbe(probe, "cfRequestKeySize", Marshal.SizeOf<CfRequestKey>());
+        AssertProbe(probe, "cfSyncStatusSize", Marshal.SizeOf<CfSyncStatus>());
+        AssertOffset<CfSyncStatus>(probe, "cfSyncStatusCodeOffset", nameof(CfSyncStatus.Code));
+        AssertOffset<CfSyncStatus>(probe, "cfSyncStatusDescriptionOffsetOffset", nameof(CfSyncStatus.DescriptionOffset));
+        AssertOffset<CfSyncStatus>(probe, "cfSyncStatusDeviceIdOffsetOffset", nameof(CfSyncStatus.DeviceIdOffset));
         AssertProbe(probe, "cfProcessInfoSize", Marshal.SizeOf<CfProcessInfo>());
         AssertProbe(probe, "cfCallbackInfoSize", Marshal.SizeOf<CfCallbackInfo>());
         AssertOffset<CfCallbackInfo>(probe, "cfCallbackInfoConnectionKeyOffset", nameof(CfCallbackInfo.ConnectionKey));

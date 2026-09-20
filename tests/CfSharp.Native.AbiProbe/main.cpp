@@ -7,10 +7,20 @@
 
 int main()
 {
+    constexpr CF_CALLBACK_REGISTRATION callbackRegistrationEnd = CF_CALLBACK_REGISTRATION_END;
+
     // The probe emits machine-readable ABI facts obtained from the active
     // Windows SDK. Managed tests will compare these values with the bindings.
     std::cout << "{\n"
               << "  \"pointerSize\": " << sizeof(void*) << ",\n"
+              << "  \"cfEndOfFile\": " << CF_EOF << ",\n"
+              << "  \"cfDefaultRequestKey\": " << CF_REQUEST_KEY_DEFAULT << ",\n"
+              << "  \"cfMaxFileIdentityLength\": " << CF_PLACEHOLDER_MAX_FILE_IDENTITY_LENGTH << ",\n"
+              << "  \"cfMaxPriorityHint\": " << CF_MAX_PRIORITY_HINT << ",\n"
+              << "  \"cfMaxProviderNameLength\": " << CF_MAX_PROVIDER_NAME_LENGTH << ",\n"
+              << "  \"cfMaxProviderVersionLength\": " << CF_MAX_PROVIDER_VERSION_LENGTH << ",\n"
+              << "  \"cfCallbackRegistrationEndType\": " << callbackRegistrationEnd.Type << ",\n"
+              << "  \"cfCallbackRegistrationEndCallbackNull\": " << (callbackRegistrationEnd.Callback == nullptr) << ",\n"
               << "  \"cfPlatformInfoSize\": " << sizeof(CF_PLATFORM_INFO) << ",\n"
               << "  \"cfPlatformInfoBuildNumberOffset\": " << offsetof(CF_PLATFORM_INFO, BuildNumber) << ",\n"
               << "  \"cfPlatformInfoRevisionNumberOffset\": " << offsetof(CF_PLATFORM_INFO, RevisionNumber) << ",\n"
@@ -45,6 +55,12 @@ int main()
               << "  \"cfInSyncPolicyTrackAll\": " << CF_INSYNC_POLICY_TRACK_ALL << ",\n"
               << "  \"cfSyncRootInfoProvider\": " << CF_SYNC_ROOT_INFO_PROVIDER << ",\n"
               << "  \"cfConnectionKeySize\": " << sizeof(CF_CONNECTION_KEY) << ",\n"
+              << "  \"cfTransferKeySize\": " << sizeof(CF_TRANSFER_KEY) << ",\n"
+              << "  \"cfRequestKeySize\": " << sizeof(CF_REQUEST_KEY) << ",\n"
+              << "  \"cfSyncStatusSize\": " << sizeof(CF_SYNC_STATUS) << ",\n"
+              << "  \"cfSyncStatusCodeOffset\": " << offsetof(CF_SYNC_STATUS, Code) << ",\n"
+              << "  \"cfSyncStatusDescriptionOffsetOffset\": " << offsetof(CF_SYNC_STATUS, DescriptionOffset) << ",\n"
+              << "  \"cfSyncStatusDeviceIdOffsetOffset\": " << offsetof(CF_SYNC_STATUS, DeviceIdOffset) << ",\n"
               << "  \"cfProcessInfoSize\": " << sizeof(CF_PROCESS_INFO) << ",\n"
               << "  \"cfCallbackInfoSize\": " << sizeof(CF_CALLBACK_INFO) << ",\n"
               << "  \"cfCallbackInfoConnectionKeyOffset\": " << offsetof(CF_CALLBACK_INFO, ConnectionKey) << ",\n"

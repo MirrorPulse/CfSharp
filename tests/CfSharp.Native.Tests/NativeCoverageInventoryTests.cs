@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace CfSharp.Native.Tests;
@@ -8,6 +12,8 @@ public sealed class NativeCoverageInventoryTests
     private const int ExpectedFunctionCount = 36;
     private const int ExpectedMappedSymbolCount = 116;
     private const int ExpectedMappedFunctionCount = 36;
+    private const string ExpectedPinnedHeaderSymbolFingerprint =
+        "086596e9d2d29e29ad58c7803cc02d0070ad8a31510fc6b605de453ef30fc70c";
 
     [Fact]
     public void InventoryTracksPinnedHeaderAndCurrentCoverage()
@@ -62,6 +68,128 @@ public sealed class NativeCoverageInventoryTests
         }
 
         Assert.All(entries, entry => Assert.Equal("mapped", entry.GetProperty("status").GetString()));
+    }
+
+    [Fact]
+    public void InventoryExactlyMatchesPinnedHeaderContractAndManagedSymbols()
+    {
+        using JsonDocument document = LoadInventory();
+        JsonElement[] entries = document.RootElement
+            .GetProperty("symbols")
+            .EnumerateArray()
+            .ToArray();
+
+        string canonicalSymbols = string.Join(
+            '\n',
+            entries
+                .Select(entry => $"{entry.GetProperty("kind").GetString()}|{GetNativeName(entry)}")
+                .OrderBy(value => value, StringComparer.Ordinal));
+        string fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonicalSymbols)))
+            .ToLowerInvariant();
+        Assert.Equal(ExpectedPinnedHeaderSymbolFingerprint, fingerprint);
+
+        Assembly nativeAssembly = typeof(CfApi).Assembly;
+        foreach (JsonElement entry in entries)
+        {
+            AssertManagedSymbolExists(
+                nativeAssembly,
+                entry.GetProperty("managedSymbol").GetString()!);
+        }
+
+        string[] inventoryFunctions = entries
+            .Where(IsFunction)
+            .Select(GetNativeName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        string[] importedFunctions = typeof(CfApi)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(method => method.GetCustomAttribute<LibraryImportAttribute>() is not null)
+            .Select(method => method.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(inventoryFunctions, importedFunctions);
+    }
+
+    [Fact]
+    public void CldApiExportsEveryFunctionAvailableOnCurrentWindowsVersion()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+        {
+            return;
+        }
+
+        using JsonDocument document = LoadInventory();
+        JsonElement root = document.RootElement;
+        JsonElement versionOverrides = root.GetProperty("versionOverrides");
+        string defaultVersion = root
+            .GetProperty("header")
+            .GetProperty("defaultMinimumWindowsVersion")
+            .GetString()!;
+        nint library = NativeLibrary.Load("CldApi.dll");
+
+        try
+        {
+            foreach (JsonElement entry in root.GetProperty("symbols").EnumerateArray().Where(IsFunction))
+            {
+                string nativeName = GetNativeName(entry);
+                string minimumVersion = versionOverrides.TryGetProperty(nativeName, out JsonElement version)
+                    ? version.GetString()!
+                    : defaultVersion;
+
+                if (IsCurrentWindowsAtLeast(minimumVersion))
+                {
+                    Assert.True(NativeLibrary.TryGetExport(library, nativeName, out _), nativeName);
+                }
+            }
+        }
+        finally
+        {
+            NativeLibrary.Free(library);
+        }
+    }
+
+    private static JsonDocument LoadInventory()
+    {
+        string inventoryPath = Path.Combine(AppContext.BaseDirectory, "cfapi-coverage.json");
+        return JsonDocument.Parse(File.ReadAllText(inventoryPath));
+    }
+
+    private static void AssertManagedSymbolExists(Assembly assembly, string managedSymbol)
+    {
+        if (assembly.GetType(managedSymbol, throwOnError: false) is not null)
+        {
+            return;
+        }
+
+        int separator = managedSymbol.LastIndexOf('.');
+        while (separator > 0)
+        {
+            string typeName = managedSymbol[..separator];
+            Type? declaringType = assembly.GetType(typeName, throwOnError: false);
+            if (declaringType is not null)
+            {
+                string memberName = managedSymbol[(separator + 1)..];
+                MemberInfo[] members = declaringType.GetMember(
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+                Assert.True(members.Length > 0, managedSymbol);
+                return;
+            }
+
+            separator = managedSymbol.LastIndexOf('.', separator - 1);
+        }
+
+        Assert.Fail($"Managed symbol '{managedSymbol}' could not be resolved.");
+    }
+
+    private static bool IsCurrentWindowsAtLeast(string versionText)
+    {
+        Version version = Version.Parse(versionText);
+        return OperatingSystem.IsWindowsVersionAtLeast(
+            version.Major,
+            version.Minor,
+            version.Build);
     }
 
     private static bool IsFunction(JsonElement entry) =>

@@ -52,3 +52,46 @@ jobs:
         with:
           name: packages
           path: artifacts/packages/*
+
+  native-abi-x64:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Configure x64 ABI probe
+        run: cmake -S tests/CfSharp.Native.AbiProbe -B artifacts/abi-probe/build -A x64
+
+      - name: Build x64 ABI probe
+        run: cmake --build artifacts/abi-probe/build --config Release
+
+      - name: Capture native ABI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/abi-probe | Out-Null
+          & artifacts/abi-probe/build/Release/CfSharp.Native.AbiProbe.exe |
+            Set-Content -Encoding utf8 artifacts/abi-probe/x64.json
+
+      - name: Restore native tests
+        run: dotnet restore tests/CfSharp.Native.Tests/CfSharp.Native.Tests.csproj
+
+      - name: Compare managed and native ABI
+        run: dotnet test tests/CfSharp.Native.Tests/CfSharp.Native.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=abi-test-results.trx"
+        env:
+          CFSHARP_ABI_PROBE_JSON: ${{ github.workspace }}\artifacts\abi-probe\x64.json
+
+      - name: Upload ABI results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-abi-x64
+          path: |
+            artifacts/abi-probe/x64.json
+            tests/CfSharp.Native.Tests/TestResults/**
+          if-no-files-found: error

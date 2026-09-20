@@ -1,3 +1,4 @@
+#include <windows.h>
 #include <cfapi.h>
 
 #include <cstddef>

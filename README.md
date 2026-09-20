@@ -23,6 +23,20 @@ CfSharp is in the design and repository-bootstrap stage. No production package h
 
 CfSharp targets Windows and is intended for desktop sync-provider applications.
 
+## Development
+
+The repository currently uses the .NET SDK selected by `global.json`.
+
+```powershell
+dotnet restore CfSharp.sln
+dotnet build CfSharp.sln --configuration Release --no-restore
+dotnet test CfSharp.sln --configuration Release --no-build
+dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build
+dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build
+```
+
+The native ABI probe under `tests/CfSharp.Native.AbiProbe` additionally requires the Microsoft Visual C++ Build Tools.
+
 ## Author
 
 Quaternion8192

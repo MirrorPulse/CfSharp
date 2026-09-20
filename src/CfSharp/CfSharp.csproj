@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>CfSharp</PackageId>
+    <Description>Safe, idiomatic .NET APIs for Windows Cloud Files sync providers.</Description>
+    <PackageTags>windows;cloud-files;cfapi;sync-provider</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CfSharp.Native\CfSharp.Native.csproj" />
+  </ItemGroup>
+</Project>

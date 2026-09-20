@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore CfSharp.sln
+
+      - name: Verify formatting
+        run: dotnet format CfSharp.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build CfSharp.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CfSharp.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
+
+      - name: Pack native bindings
+        run: dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build --output artifacts/packages
+
+      - name: Pack high-level library
+        run: dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build --output artifacts/packages
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/TestResults/**"
+          if-no-files-found: ignore
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts/packages/*

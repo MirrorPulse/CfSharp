@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>CfSharp.Native</PackageId>
+    <Description>Complete native bindings for the Windows Cloud Files API.</Description>
+    <PackageTags>windows;cloud-files;cfapi;interop;pinvoke</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

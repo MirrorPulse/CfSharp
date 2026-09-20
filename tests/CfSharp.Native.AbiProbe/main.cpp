@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <winternl.h>
 #include <cfapi.h>
 
 #include <cstddef>

@@ -42,6 +42,22 @@ public sealed class CloudFileSystemLifecycleTests
             root = CloudSyncRoot.Open(rootPath);
             registered = true;
             Assert.Equal(registration.ProviderName, root.GetInfo().ProviderName);
+            byte[] placeholderIdentity = providerId.ToByteArray();
+            root.CreateFilePlaceholder("online-only.bin", 4096, placeholderIdentity);
+
+            CloudItemSnapshot placeholder = await fileSystem
+                .GetFile("online-only.bin")
+                .InspectAsync();
+            CloudItemSnapshot syncRoot = await fileSystem.Root.InspectAsync();
+
+            Assert.True(placeholder.Exists);
+            Assert.True(placeholder.IsPlaceholder);
+            Assert.Equal(4096, placeholder.Length);
+            Assert.Equal(0, placeholder.OnDiskDataSize);
+            Assert.Equal(CloudContentAvailability.OnlineOnly, placeholder.ContentAvailability);
+            Assert.Equal(CloudSynchronizationState.InSync, placeholder.SynchronizationState);
+            Assert.True(placeholder.PlaceholderIdentity.Span.SequenceEqual(placeholderIdentity));
+            Assert.True(syncRoot.PlaceholderState.HasFlag(CloudPlaceholderState.SyncRoot));
 
             await fileSystem.DisposeAsync();
 
@@ -123,14 +139,65 @@ public sealed class CloudFileSystemLifecycleTests
         internal int DisposeCalls { get; private set; }
 
         public ValueTask<ICloudStateTransaction> BeginTransactionAsync(
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<ICloudStateTransaction>(new EmptyTransaction());
+        }
 
         public ValueTask DisposeAsync()
         {
             DisposeCalls++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class EmptyTransaction : ICloudStateTransaction, ICloudItemStateRepository
+    {
+        public ICloudItemStateRepository Items => this;
+
+        public ICloudCheckpointRepository Checkpoints => throw new NotSupportedException();
+
+        public ICloudOperationJournal Operations => throw new NotSupportedException();
+
+        public ICloudConflictRepository Conflicts => throw new NotSupportedException();
+
+        public ICloudRemoteBatchRepository RemoteBatches => throw new NotSupportedException();
+
+        public ICloudEchoSuppressionRepository EchoSuppressions => throw new NotSupportedException();
+
+        public ValueTask<CloudItemState?> GetByItemIdAsync(
+            Guid itemId,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<CloudItemState?>(null);
+
+        public ValueTask<CloudItemState?> GetByRemoteIdAsync(
+            string remoteId,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<CloudItemState?>(null);
+
+        public ValueTask<CloudItemState?> GetByRelativePathAsync(
+            string relativePath,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<CloudItemState?>(null);
+
+        public ValueTask UpsertAsync(
+            CloudItemState item,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask RemoveAsync(
+            Guid itemId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask CommitAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask RollbackAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class StubContentProvider : ICloudFileContentProvider

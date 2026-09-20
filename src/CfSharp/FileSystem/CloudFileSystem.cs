@@ -62,6 +62,11 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
     public CloudFileSystemLifecycleState LifecycleState =>
         (CloudFileSystemLifecycleState)Volatile.Read(ref _state);
 
+    /// <summary>Gets an immutable reference to the sync-root directory.</summary>
+    /// <exception cref="InvalidOperationException">The file system has not finished starting.</exception>
+    /// <exception cref="ObjectDisposedException">The file system is stopping or disposed.</exception>
+    public CloudDirectory Root => GetDirectory(string.Empty);
+
     /// <summary>Creates a mutable builder for one local sync-root directory.</summary>
     /// <param name="syncRootPath">
     /// Absolute path of the existing directory that is or will become a Cloud Files sync root.
@@ -77,6 +82,46 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         string syncRootPath,
         ICloudFileSystemRuntime runtime) =>
         new(syncRootPath, runtime);
+
+    /// <summary>Creates an immutable path-bound file reference without opening the item.</summary>
+    /// <param name="relativePath">Path relative to the sync root. It need not currently exist.</param>
+    /// <returns>A file reference whose inspections read fresh state.</returns>
+    /// <exception cref="ArgumentException">
+    /// The path is rooted, identifies the sync root, escapes it lexically, or resolves outside it
+    /// through an existing symbolic link or junction.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The file system has not finished starting.</exception>
+    /// <exception cref="ObjectDisposedException">The file system is stopping or disposed.</exception>
+    public CloudFile GetFile(string relativePath)
+    {
+        EnsureStarted();
+        CloudItemPath path = CloudItemPathResolver.Resolve(
+            SyncRootPath,
+            relativePath,
+            allowRoot: false);
+        return new CloudFile(this, path.FullPath, path.RelativePath);
+    }
+
+    /// <summary>Creates an immutable path-bound directory reference without opening the item.</summary>
+    /// <param name="relativePath">
+    /// Path relative to the sync root, or an empty string for the root. It need not currently exist.
+    /// </param>
+    /// <returns>A directory reference whose inspections read fresh state.</returns>
+    /// <exception cref="ArgumentException">
+    /// The path is rooted, escapes the sync root lexically, or resolves outside it through an
+    /// existing symbolic link or junction.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The file system has not finished starting.</exception>
+    /// <exception cref="ObjectDisposedException">The file system is stopping or disposed.</exception>
+    public CloudDirectory GetDirectory(string relativePath)
+    {
+        EnsureStarted();
+        CloudItemPath path = CloudItemPathResolver.Resolve(
+            SyncRootPath,
+            relativePath,
+            allowRoot: true);
+        return new CloudDirectory(this, path.FullPath, path.RelativePath);
+    }
 
     /// <summary>Opens all configured process resources and makes the file system ready.</summary>
     /// <param name="cancellationToken">
@@ -223,6 +268,71 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         finally
         {
             _lifecycleGate.Release();
+        }
+    }
+
+    internal async ValueTask<CloudItemSnapshot> InspectAsync(
+        CloudItem item,
+        CancellationToken cancellationToken)
+    {
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureStarted();
+            LocalCloudItemInspection local = CloudItemInspector.Inspect(item.FullPath, item.Kind);
+            ICloudStateStore stateStore = _stateStore ??
+                throw new InvalidOperationException("The cloud file system has no open state store.");
+            await using ICloudStateTransaction transaction = await stateStore
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            CloudItemState? durableState = await transaction.Items
+                .GetByRelativePathAsync(item.RelativePath, cancellationToken)
+                .ConfigureAwait(false);
+            if (durableState is not null && durableState.Kind != item.Kind)
+            {
+                throw new InvalidOperationException(
+                    $"Durable state identifies '{item.RelativePath}' as a " +
+                    $"{durableState.Kind.ToString().ToLowerInvariant()}, not a " +
+                    $"{item.Kind.ToString().ToLowerInvariant()}.");
+            }
+
+            return new CloudItemSnapshot(
+                item.Kind,
+                local.Exists,
+                local.Attributes,
+                local.Length,
+                local.CreationTime,
+                local.LastWriteTime,
+                local.LastAccessTime,
+                local.PlaceholderState,
+                local.ContentAvailability,
+                local.PinState,
+                local.SynchronizationState,
+                local.LocalFileId,
+                local.SyncRootFileId,
+                local.OnDiskDataSize,
+                local.ValidatedDataSize,
+                local.ModifiedDataSize,
+                local.PropertyDataSize,
+                local.PlaceholderIdentity,
+                durableState,
+                DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private void EnsureStarted()
+    {
+        CloudFileSystemLifecycleState state = LifecycleState;
+        ObjectDisposedException.ThrowIf(
+            state is CloudFileSystemLifecycleState.Stopping or CloudFileSystemLifecycleState.Disposed,
+            this);
+        if (state is not CloudFileSystemLifecycleState.Started)
+        {
+            throw new InvalidOperationException("The cloud file system has not been started.");
         }
     }
 

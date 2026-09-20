@@ -1,0 +1,81 @@
+namespace CfSharp;
+
+internal readonly record struct CloudItemPath(string FullPath, string RelativePath);
+
+internal static class CloudItemPathResolver
+{
+    internal static CloudItemPath Resolve(string syncRootPath, string relativePath, bool allowRoot)
+    {
+        ArgumentNullException.ThrowIfNull(relativePath);
+        if (Path.IsPathFullyQualified(relativePath))
+        {
+            throw new ArgumentException("The item path must be relative to the sync root.", nameof(relativePath));
+        }
+
+        string fullPath = Path.GetFullPath(Path.Combine(syncRootPath, relativePath));
+        string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(syncRootPath));
+        if (!IsSameOrChild(normalizedRoot, fullPath))
+        {
+            throw new ArgumentException("The item path escapes the sync root.", nameof(relativePath));
+        }
+
+        string canonicalRelativePath = Path.GetRelativePath(normalizedRoot, fullPath);
+        if (canonicalRelativePath == ".")
+        {
+            if (!allowRoot)
+            {
+                throw new ArgumentException("A file path cannot identify the sync root.", nameof(relativePath));
+            }
+
+            canonicalRelativePath = string.Empty;
+        }
+
+        string physicalRoot = ResolveExistingLinks(normalizedRoot);
+        string physicalItem = ResolveExistingLinks(fullPath);
+        if (!IsSameOrChild(physicalRoot, physicalItem))
+        {
+            throw new ArgumentException(
+                "The item path resolves outside the sync root through a file-system link.",
+                nameof(relativePath));
+        }
+
+        return new CloudItemPath(fullPath, canonicalRelativePath);
+    }
+
+    private static string ResolveExistingLinks(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string root = Path.GetPathRoot(fullPath)!;
+        string current = root;
+        string remainder = fullPath[root.Length..];
+        foreach (string segment in remainder.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            string next = Path.Combine(current, segment);
+            FileSystemInfo? fileSystemInfo = Directory.Exists(next)
+                ? new DirectoryInfo(next)
+                : File.Exists(next)
+                    ? new FileInfo(next)
+                    : null;
+            if (fileSystemInfo is null)
+            {
+                current = next;
+                continue;
+            }
+
+            FileSystemInfo? resolved = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: true);
+            current = resolved?.FullName ?? next;
+        }
+
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
+    }
+
+    private static bool IsSameOrChild(string parentPath, string candidatePath)
+    {
+        string parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parentPath));
+        string candidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath));
+        return string.Equals(parent, candidate, StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+}

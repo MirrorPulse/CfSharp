@@ -82,11 +82,21 @@ await using CloudFileSystem fileSystem = CloudFileSystem.CreateBuilder(localDire
     .Build();
 
 await fileSystem.StartAsync(cancellationToken);
+
+CloudFile report = fileSystem.GetFile(@"Documents\report.pdf");
+CloudItemSnapshot current = await report.InspectAsync(cancellationToken);
 ```
 
 Disposal stops the provider session before closing durable state. It intentionally leaves the
 persistent sync-root registration installed. Use `CloudSyncRoot.Unregister()` only for explicit
 account removal or uninstall.
+
+`CloudFile`, `CloudDirectory`, and the root directory are immutable path references. They keep no
+native handle and cache no mutable attributes. Every `InspectAsync()` call returns a fresh,
+immutable snapshot combining current local metadata, independent Cloud Files placeholder flags,
+content availability, pin and in-sync state, opaque placeholder identity, and any matching durable
+item mapping. A missing local item is represented by `Exists == false`, allowing a durable
+tombstone to remain visible without inventing file-system state.
 
 ## Sample Provider
 

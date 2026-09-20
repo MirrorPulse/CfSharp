@@ -18,9 +18,9 @@ The project is designed around two packages:
 ## Status
 
 CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, and
-the native provider callback, placeholder creation, and transfer primitives are implemented.
-The safe managed provider runtime and complete file-system facade are not yet ready. No
-production package has been released.
+native callback, placeholder creation, and transfer primitives are implemented. A safe managed
+provider session can hydrate file content on demand. Namespace callbacks and the complete
+file-system facade are not yet ready. No production package has been released.
 
 ## Sync Root Lifecycle
 
@@ -43,6 +43,20 @@ CloudSyncRootInfo current = root.GetInfo();
 Registration is persistent and does not end when the process exits. `Unregister()` is an
 explicit account-removal or uninstall operation: Windows traverses the tree and may delete
 placeholder content that is not locally complete. It must not be used as routine session cleanup.
+
+## Sample Provider
+
+The sample mirrors files from a local content directory into a registered sync root as
+online-only placeholders, then verifies hydration through ordinary file reads:
+
+```powershell
+dotnet run --project samples/CfSharp.SampleProvider -- `
+  C:\CloudContent `
+  C:\CloudSyncRoot
+```
+
+The sample closes its process-scoped provider session before exiting but intentionally leaves the
+persistent registration installed. Remove it explicitly only when removing that sample account.
 
 ## Platform
 

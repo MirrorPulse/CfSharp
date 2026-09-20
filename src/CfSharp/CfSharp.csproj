@@ -5,6 +5,7 @@
     <Description>Safe, idiomatic .NET APIs for Windows Cloud Files sync providers.</Description>
     <PackageTags>windows;cloud-files;cfapi;sync-provider</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

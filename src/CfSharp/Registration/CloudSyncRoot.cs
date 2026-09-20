@@ -166,6 +166,98 @@ public sealed class CloudSyncRoot
         }
     }
 
+    /// <summary>Creates an online-only file placeholder beneath this sync root.</summary>
+    /// <param name="relativePath">
+    /// Non-rooted path beneath the sync root. Its parent directory must already exist.
+    /// </param>
+    /// <param name="fileSize">Non-negative logical size of the remote file in bytes.</param>
+    /// <param name="fileIdentity">
+    /// Provider-defined identity returned with future callbacks. The value is copied by Windows
+    /// and cannot exceed <see cref="SyncRootRegistrationOptions.MaxFileIdentityLength"/> bytes.
+    /// </param>
+    /// <returns>The normalized created path and its creation update sequence number.</returns>
+    /// <exception cref="ArgumentException">The path is empty, rooted, or escapes the sync root.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="fileSize"/> is negative.</exception>
+    /// <exception cref="DirectoryNotFoundException">The placeholder's parent directory is absent.</exception>
+    /// <exception cref="CloudFilesException">Windows rejects the placeholder creation.</exception>
+    /// <remarks>
+    /// The placeholder is marked in sync and initially contains no local data. Reading it requires
+    /// an active <see cref="CloudProviderSession"/> capable of supplying its identity's content.
+    /// This method is thread-safe for distinct paths; callers must coordinate competing operations
+    /// targeting the same path.
+    /// </remarks>
+    public unsafe CloudPlaceholderCreationResult CreateFilePlaceholder(
+        string relativePath,
+        long fileSize,
+        ReadOnlySpan<byte> fileIdentity)
+    {
+        EnsureSupportedPlatform();
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentOutOfRangeException.ThrowIfNegative(fileSize);
+        if (System.IO.Path.IsPathRooted(relativePath))
+        {
+            throw new ArgumentException("The placeholder path must be relative.", nameof(relativePath));
+        }
+
+        if (fileIdentity.Length > SyncRootRegistrationOptions.MaxFileIdentityLength)
+        {
+            throw new ArgumentException(
+                $"The file identity cannot exceed {SyncRootRegistrationOptions.MaxFileIdentityLength} bytes.",
+                nameof(fileIdentity));
+        }
+
+        string targetPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(Path, relativePath));
+        string rootPrefix = Path + System.IO.Path.DirectorySeparatorChar;
+        if (!targetPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The placeholder path escapes the sync root.", nameof(relativePath));
+        }
+
+        string? parentPath = System.IO.Path.GetDirectoryName(targetPath);
+        if (parentPath is null || !Directory.Exists(parentPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"The placeholder parent directory does not exist: '{parentPath}'.");
+        }
+
+        string normalizedRelativePath = System.IO.Path.GetRelativePath(Path, targetPath);
+        fixed (char* rootPathPointer = Path)
+        fixed (char* relativePathPointer = normalizedRelativePath)
+        fixed (byte* identityPointer = fileIdentity)
+        {
+            CfPlaceholderCreateInfo placeholder = new()
+            {
+                RelativeFileName = relativePathPointer,
+                FsMetadata = new CfFsMetadata
+                {
+                    BasicInfo = new CfFileBasicInfo
+                    {
+                        FileAttributes = (uint)FileAttributes.Normal,
+                    },
+                    FileSize = fileSize,
+                },
+                FileIdentity = identityPointer,
+                FileIdentityLength = (uint)fileIdentity.Length,
+                Flags = CfPlaceholderCreateFlags.MarkInSync,
+            };
+            uint entriesProcessed;
+            int result = CfApi.CfCreatePlaceholders(
+                rootPathPointer,
+                &placeholder,
+                1,
+                CfCreateFlags.StopOnError,
+                &entriesProcessed);
+            ThrowIfFailed("CloudSyncRoot.CreateFilePlaceholder", targetPath, result);
+            if (entriesProcessed != 1)
+            {
+                throw new InvalidDataException("Windows did not process the placeholder entry.");
+            }
+
+            ThrowIfFailed("CloudSyncRoot.CreateFilePlaceholder", targetPath, placeholder.Result);
+            return new CloudPlaceholderCreationResult(targetPath, placeholder.CreateUsn);
+        }
+    }
+
     /// <summary>Permanently unregisters this sync root.</summary>
     /// <exception cref="PlatformNotSupportedException">The Cloud Files API is unavailable.</exception>
     /// <exception cref="CloudFilesException">

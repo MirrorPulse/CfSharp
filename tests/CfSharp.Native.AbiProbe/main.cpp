@@ -9,6 +9,10 @@ int main()
     // Windows SDK. Managed tests will compare these values with the bindings.
     std::cout << "{\n"
               << "  \"pointerSize\": " << sizeof(void*) << ",\n"
+              << "  \"cfPlatformInfoSize\": " << sizeof(CF_PLATFORM_INFO) << ",\n"
+              << "  \"cfPlatformInfoBuildNumberOffset\": " << offsetof(CF_PLATFORM_INFO, BuildNumber) << ",\n"
+              << "  \"cfPlatformInfoRevisionNumberOffset\": " << offsetof(CF_PLATFORM_INFO, RevisionNumber) << ",\n"
+              << "  \"cfPlatformInfoIntegrationNumberOffset\": " << offsetof(CF_PLATFORM_INFO, IntegrationNumber) << ",\n"
               << "  \"cfCallbackInfoSize\": " << sizeof(CF_CALLBACK_INFO) << ",\n"
               << "  \"cfOperationInfoSize\": " << sizeof(CF_OPERATION_INFO) << ",\n"
               << "  \"cfOperationParametersSize\": " << sizeof(CF_OPERATION_PARAMETERS) << "\n"

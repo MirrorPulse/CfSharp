@@ -1,6 +1,8 @@
 using System.Runtime.Versioning;
 using System.Text;
 
+using CfSharp.Native;
+
 namespace CfSharp.IntegrationTests;
 
 public sealed class ProviderHydrationTests
@@ -57,6 +59,9 @@ public sealed class ProviderHydrationTests
             Assert.Equal(expected, actual);
             Assert.NotEqual(0, placeholder.CreateUsn);
 
+            DehydrateAndExplicitlyHydrate(placeholder.Path);
+            Assert.Equal(expected, await File.ReadAllBytesAsync(placeholder.Path));
+
             await session.DisposeAsync();
             session = null;
             root.Unregister();
@@ -85,6 +90,92 @@ public sealed class ProviderHydrationTests
             {
                 Directory.Delete(testPath, recursive: true);
             }
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe void DehydrateAndExplicitlyHydrate(string placeholderPath)
+    {
+        nint protectedHandle = OpenProtectedHandle(
+            placeholderPath,
+            CfOpenFileFlags.Exclusive | CfOpenFileFlags.WriteAccess);
+        bool referenced = false;
+
+        try
+        {
+            referenced = CfApi.CfReferenceProtectedHandle(protectedHandle) != 0;
+            Assert.True(referenced);
+            nint win32Handle = CfApi.CfGetWin32HandleFromProtectedHandle(protectedHandle);
+
+            int pinResult = CfApi.CfSetPinState(
+                win32Handle,
+                CfPinState.Unpinned,
+                CfSetPinFlags.None,
+                null);
+            Assert.Equal(0, pinResult);
+
+            long inSyncUsn = 0;
+            int inSyncResult = CfApi.CfSetInSyncState(
+                win32Handle,
+                CfInSyncState.InSync,
+                CfSetInSyncFlags.None,
+                &inSyncUsn);
+            Assert.Equal(0, inSyncResult);
+
+            int dehydrateResult = CfApi.CfDehydratePlaceholder(
+                win32Handle,
+                0,
+                CfApi.EndOfFile,
+                CfDehydrateFlags.None,
+                null);
+            Assert.Equal(0, dehydrateResult);
+        }
+        finally
+        {
+            if (referenced)
+            {
+                CfApi.CfReleaseProtectedHandle(protectedHandle);
+            }
+
+            CfApi.CfCloseHandle(protectedHandle);
+        }
+
+        protectedHandle = OpenProtectedHandle(placeholderPath, CfOpenFileFlags.Foreground);
+        referenced = false;
+        try
+        {
+            referenced = CfApi.CfReferenceProtectedHandle(protectedHandle) != 0;
+            Assert.True(referenced);
+            nint win32Handle = CfApi.CfGetWin32HandleFromProtectedHandle(protectedHandle);
+
+            int hydrateResult = CfApi.CfHydratePlaceholder(
+                win32Handle,
+                0,
+                CfApi.EndOfFile,
+                CfHydrateFlags.None,
+                null);
+            Assert.Equal(0, hydrateResult);
+        }
+        finally
+        {
+            if (referenced)
+            {
+                CfApi.CfReleaseProtectedHandle(protectedHandle);
+            }
+
+            CfApi.CfCloseHandle(protectedHandle);
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe nint OpenProtectedHandle(string path, CfOpenFileFlags flags)
+    {
+        fixed (char* pathPointer = path)
+        {
+            int result = CfApi.CfOpenFileWithOplock(pathPointer, flags, out nint protectedHandle);
+            Assert.Equal(0, result);
+            Assert.NotEqual(0, protectedHandle);
+            return protectedHandle;
         }
     }
 

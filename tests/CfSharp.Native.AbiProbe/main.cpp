@@ -70,7 +70,16 @@ int main()
               << "  \"cfPlaceholderCreateInfoSize\": " << sizeof(CF_PLACEHOLDER_CREATE_INFO) << ",\n"
               << "  \"cfPlaceholderCreateInfoMetadataOffset\": " << offsetof(CF_PLACEHOLDER_CREATE_INFO, FsMetadata) << ",\n"
               << "  \"cfPlaceholderCreateInfoCreateUsnOffset\": " << offsetof(CF_PLACEHOLDER_CREATE_INFO, CreateUsn) << ",\n"
-              << "  \"cfPlaceholderCreateFlagAlwaysFull\": " << CF_PLACEHOLDER_CREATE_FLAG_ALWAYS_FULL << "\n"
+              << "  \"cfPlaceholderCreateFlagAlwaysFull\": " << CF_PLACEHOLDER_CREATE_FLAG_ALWAYS_FULL << ",\n"
+              << "  \"cfFileRangeSize\": " << sizeof(CF_FILE_RANGE) << ",\n"
+              << "  \"cfFileRangeStartingOffsetOffset\": " << offsetof(CF_FILE_RANGE, StartingOffset) << ",\n"
+              << "  \"cfFileRangeLengthOffset\": " << offsetof(CF_FILE_RANGE, Length) << ",\n"
+              << "  \"cfConvertFlagForceConvertToCloudFile\": " << CF_CONVERT_FLAG_FORCE_CONVERT_TO_CLOUD_FILE << ",\n"
+              << "  \"cfUpdateFlagAllowPartial\": " << CF_UPDATE_FLAG_ALLOW_PARTIAL << ",\n"
+              << "  \"cfDehydrateFlagBackground\": " << CF_DEHYDRATE_FLAG_BACKGROUND << ",\n"
+              << "  \"cfPinStateInherit\": " << CF_PIN_STATE_INHERIT << ",\n"
+              << "  \"cfSetPinFlagRecurseStopOnError\": " << CF_SET_PIN_FLAG_RECURSE_STOP_ON_ERROR << ",\n"
+              << "  \"cfInSyncStateInSync\": " << CF_IN_SYNC_STATE_IN_SYNC << "\n"
               << "}\n";
 
     return 0;

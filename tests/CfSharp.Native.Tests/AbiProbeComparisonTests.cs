@@ -80,6 +80,15 @@ public sealed class AbiProbeComparisonTests
         AssertOffset<CfPlaceholderCreateInfo>(probe, "cfPlaceholderCreateInfoMetadataOffset", nameof(CfPlaceholderCreateInfo.FsMetadata));
         AssertOffset<CfPlaceholderCreateInfo>(probe, "cfPlaceholderCreateInfoCreateUsnOffset", nameof(CfPlaceholderCreateInfo.CreateUsn));
         AssertProbe(probe, "cfPlaceholderCreateFlagAlwaysFull", (uint)CfPlaceholderCreateFlags.AlwaysFull);
+        AssertProbe(probe, "cfFileRangeSize", Marshal.SizeOf<CfFileRange>());
+        AssertOffset<CfFileRange>(probe, "cfFileRangeStartingOffsetOffset", nameof(CfFileRange.StartingOffset));
+        AssertOffset<CfFileRange>(probe, "cfFileRangeLengthOffset", nameof(CfFileRange.Length));
+        AssertProbe(probe, "cfConvertFlagForceConvertToCloudFile", (uint)CfConvertFlags.ForceConvertToCloudFile);
+        AssertProbe(probe, "cfUpdateFlagAllowPartial", (uint)CfUpdateFlags.AllowPartial);
+        AssertProbe(probe, "cfDehydrateFlagBackground", (uint)CfDehydrateFlags.Background);
+        AssertProbe(probe, "cfPinStateInherit", (int)CfPinState.Inherit);
+        AssertProbe(probe, "cfSetPinFlagRecurseStopOnError", (uint)CfSetPinFlags.RecurseStopOnError);
+        AssertProbe(probe, "cfInSyncStateInSync", (int)CfInSyncState.InSync);
     }
 
     private static void AssertOffset<T>(

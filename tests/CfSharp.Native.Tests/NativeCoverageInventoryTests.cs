@@ -6,8 +6,8 @@ public sealed class NativeCoverageInventoryTests
 {
     private const int ExpectedSymbolCount = 116;
     private const int ExpectedFunctionCount = 36;
-    private const int ExpectedMappedSymbolCount = 83;
-    private const int ExpectedMappedFunctionCount = 18;
+    private const int ExpectedMappedSymbolCount = 100;
+    private const int ExpectedMappedFunctionCount = 25;
 
     [Fact]
     public void InventoryTracksPinnedHeaderAndCurrentCoverage()

@@ -376,6 +376,253 @@ public static partial class CfApi
         Justification = "CfSharp.Native intentionally exposes the native protected-handle lifetime.")]
     public static partial void CfCloseHandle(nint fileHandle);
 
+    /// <summary>Converts an existing ordinary file or directory into a Cloud Files placeholder.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to an item within a registered sync root. Write-data or write-DAC access
+    /// is required. When dehydration is requested, the handle must provide exclusive access.
+    /// </param>
+    /// <param name="fileIdentity">
+    /// Optional pointer to caller-owned opaque identity bytes. The buffer need remain valid until
+    /// synchronous completion or until an asynchronous operation completes.
+    /// </param>
+    /// <param name="fileIdentityLength">
+    /// Length of <paramref name="fileIdentity"/> in bytes; cannot exceed
+    /// <see cref="MaxFileIdentityLength"/>.
+    /// </param>
+    /// <param name="convertFlags">Flags controlling synchronization, hydration, and population state.</param>
+    /// <param name="convertUsn">
+    /// Optional pointer receiving the final update sequence number after conversion.
+    /// </param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state. When supplied with an asynchronous handle,
+    /// it and every input buffer must remain valid until completion is observed.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A pending asynchronous operation is reported
+    /// as the HRESULT form of <c>ERROR_IO_PENDING</c>.
+    /// </returns>
+    /// <remarks>
+    /// The operation mutates file-system state. <see cref="CfConvertFlags.Dehydrate"/> requires an
+    /// unpinned, in-sync item and a sync-root hydration policy that permits dehydration. The
+    /// platform does not verify that the caller's handle is exclusive.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfConvertToPlaceholder))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfConvertToPlaceholder(
+        nint fileHandle,
+        void* fileIdentity,
+        uint fileIdentityLength,
+        CfConvertFlags convertFlags,
+        long* convertUsn,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Updates metadata, identity, validity ranges, or state on an existing placeholder.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to the placeholder with write-data or write-DAC access. Dehydrating an
+    /// updated file requires an exclusive handle.
+    /// </param>
+    /// <param name="fsMetadata">
+    /// Optional pointer to replacement file-system metadata. Unless passthrough is requested,
+    /// zero-valued timestamps and attributes mean unchanged; a zero file size still means zero.
+    /// </param>
+    /// <param name="fileIdentity">Optional pointer to replacement opaque identity bytes.</param>
+    /// <param name="fileIdentityLength">
+    /// Length of <paramref name="fileIdentity"/> in bytes; cannot exceed
+    /// <see cref="MaxFileIdentityLength"/>.
+    /// </param>
+    /// <param name="dehydrateRangeArray">
+    /// Optional pointer to page-aligned ranges whose local content becomes invalid.
+    /// </param>
+    /// <param name="dehydrateRangeCount">Number of entries in <paramref name="dehydrateRangeArray"/>.</param>
+    /// <param name="updateFlags">Flags selecting the placeholder changes and preconditions.</param>
+    /// <param name="updateUsn">
+    /// Optional input/output update sequence number. A nonzero input makes the operation
+    /// conditional; on success Windows writes the final value.
+    /// </param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state. For asynchronous completion, all pointed-to
+    /// buffers and the structure must remain valid until completion is observed.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation, including the HRESULT form of
+    /// <c>ERROR_IO_PENDING</c> for an asynchronous operation.
+    /// </returns>
+    /// <remarks>
+    /// The operation is atomic with respect to its requested range invalidation: if any supplied
+    /// range cannot be dehydrated, the update fails rather than leaving torn content. Supplying
+    /// <see cref="CfUpdateFlags.Dehydrate"/> causes the range array to be ignored.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfUpdatePlaceholder))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfUpdatePlaceholder(
+        nint fileHandle,
+        CfFsMetadata* fsMetadata,
+        void* fileIdentity,
+        uint fileIdentityLength,
+        CfFileRange* dehydrateRangeArray,
+        uint dehydrateRangeCount,
+        CfUpdateFlags updateFlags,
+        long* updateUsn,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Reverts a placeholder to an ordinary file or directory.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to the placeholder with write-data or write-DAC access.
+    /// </param>
+    /// <param name="revertFlags">Revert behavior; only <see cref="CfRevertFlags.None"/> is defined.</param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state that must remain valid through asynchronous
+    /// completion.
+    /// </param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// Reversion permanently removes the Cloud Files reparse data and identity. Windows first
+    /// hydrates incomplete file content, which can invoke the connected provider and fail if the
+    /// content cannot be obtained.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfRevertPlaceholder))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfRevertPlaceholder(
+        nint fileHandle,
+        CfRevertFlags revertFlags,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Ensures that a byte range of a placeholder file is present locally.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to the placeholder with read-data or write-DAC access.
+    /// </param>
+    /// <param name="startingOffset">Zero-based first byte to hydrate.</param>
+    /// <param name="length">
+    /// Number of bytes to hydrate, or <see cref="EndOfFile"/> to continue to logical end of file.
+    /// </param>
+    /// <param name="hydrateFlags">Hydration behavior; only <see cref="CfHydrateFlags.None"/> is defined.</param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state that must remain valid through asynchronous
+    /// completion.
+    /// </param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// Missing ranges cause fetch callbacks to the connected provider. A null overlapped pointer
+    /// makes the operation synchronous even when the handle was opened for asynchronous I/O.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfHydratePlaceholder))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfHydratePlaceholder(
+        nint fileHandle,
+        long startingOffset,
+        long length,
+        CfHydrateFlags hydrateFlags,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Removes locally present content from a byte range of a placeholder file.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to an unpinned, in-sync placeholder that permits dehydration.
+    /// </param>
+    /// <param name="startingOffset">Zero-based first byte to dehydrate.</param>
+    /// <param name="length">
+    /// Number of bytes to dehydrate, or <see cref="EndOfFile"/> to continue to logical end of file.
+    /// </param>
+    /// <param name="dehydrateFlags">Flags describing foreground or background dehydration.</param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state that must remain valid through asynchronous
+    /// completion.
+    /// </param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// The platform may expand a non-page-aligned requested range to page boundaries. Dehydration
+    /// changes availability only; the placeholder identity and metadata remain present.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfDehydratePlaceholder))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfDehydratePlaceholder(
+        nint fileHandle,
+        long startingOffset,
+        long length,
+        CfDehydrateFlags dehydrateFlags,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Sets the user's requested pin state for a placeholder.</summary>
+    /// <param name="fileHandle">Open Win32 handle to the placeholder.</param>
+    /// <param name="pinState">Requested local-availability state.</param>
+    /// <param name="pinFlags">Flags controlling recursive directory application.</param>
+    /// <param name="overlapped">
+    /// Optional caller-owned native overlapped state that must remain valid through asynchronous
+    /// completion.
+    /// </param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// This API records user intent and may be called by applications other than the provider.
+    /// Recursive calls can partially apply unless <see cref="CfSetPinFlags.RecurseStopOnError"/>
+    /// is specified; the native API does not return per-descendant results.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfSetPinState))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfSetPinState(
+        nint fileHandle,
+        CfPinState pinState,
+        CfSetPinFlags pinFlags,
+        NativeOverlapped* overlapped);
+
+    /// <summary>Sets whether a placeholder agrees with its provider state.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to the placeholder with write-data or write-DAC access.
+    /// </param>
+    /// <param name="inSyncState">New synchronization state.</param>
+    /// <param name="inSyncFlags">
+    /// State-update flags; only <see cref="CfSetInSyncFlags.None"/> is currently defined.
+    /// </param>
+    /// <param name="inSyncUsn">
+    /// Optional input/output update sequence number. A nonzero input makes the change conditional;
+    /// on success Windows writes the final value.
+    /// </param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// The function is synchronous. Callers coordinating an upload acknowledgement should pass
+    /// the observed USN to avoid marking a locally changed item in sync.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfSetInSyncState))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfSetInSyncState(
+        nint fileHandle,
+        CfInSyncState inSyncState,
+        CfSetInSyncFlags inSyncFlags,
+        long* inSyncUsn);
+
     /// <summary>
     /// Connects a registered sync root to a provider callback table.
     /// </summary>

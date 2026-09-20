@@ -11,6 +11,11 @@ An optional `CfSharp.Storage.Sqlite` package is planned as the official durable-
 implementation. Applications will explicitly provide its database path or replace it with a
 custom transactional state store; the core library will never choose a hidden storage location.
 
+The high-level package defines `ICloudStateStoreFactory`, `ICloudStateStore`, and
+`ICloudStateTransaction` so custom backends can participate without taking a SQLite dependency.
+Transactions expose focused repositories for item mappings, checkpoints, local operations,
+conflicts, remote-batch progress, and echo suppression. Disposal without commit rolls back.
+
 ## Goals
 
 - Preserve access to every native CFAPI capability.

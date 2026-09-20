@@ -30,7 +30,7 @@ CfSharp is a Windows-only .NET library that exposes the complete Windows Cloud F
 
 ## Repository And Attribution
 
-- Use Apache License 2.0. Use `Quaternion8192` for project-owned copyright, package author, and primary attribution metadata.
+- Use Apache License 2.0. Use `MirrorPulse Team` for project-owned copyright, package author, and primary attribution metadata.
 - Follow Conventional Commits with an optional focused scope.
 - Keep commits atomic: one logical change or one fix per commit.
 - Never mix unrelated fixes, refactoring, formatting, dependency updates, or documentation changes.

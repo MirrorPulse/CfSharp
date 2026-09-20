@@ -10,8 +10,8 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
     <DebugType>embedded</DebugType>
-    <Authors>Quaternion8192</Authors>
-    <Copyright>Copyright (c) 2026 Quaternion8192</Copyright>
+    <Authors>MirrorPulse Team</Authors>
+    <Copyright>Copyright (c) 2026 MirrorPulse Team</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <RepositoryType>git</RepositoryType>

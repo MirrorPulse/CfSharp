@@ -6,7 +6,7 @@ CfSharp values correctness, reviewability, and a clear project history. Contribu
 
 Use English for source code, identifiers, comments, documentation, tests, examples, commit messages, and project metadata.
 
-Project-owned copyright, package author, and primary attribution metadata must use `Quaternion8192`. Individual contributors remain identified by their Git commit authorship.
+Project-owned copyright, package author, and primary attribution metadata must use `MirrorPulse Team`. Individual contributors remain identified by their Git commit authorship.
 
 ## Atomic Changes
 

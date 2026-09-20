@@ -63,7 +63,7 @@ The native ABI probe under `tests/CfSharp.Native.AbiProbe` additionally requires
 
 ## Author
 
-Quaternion8192
+MirrorPulse Team
 
 ## License
 

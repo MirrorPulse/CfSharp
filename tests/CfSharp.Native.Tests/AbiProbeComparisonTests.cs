@@ -141,17 +141,20 @@ public sealed class AbiProbeComparisonTests
                 .OrderBy(field => field.MetadataToken)
                 .ToArray();
             JsonElement.ArrayEnumerator nativeValues = nativeEnums.GetProperty(nativeName).EnumerateArray();
-            long[] expectedValues = nativeValues.Select(value => value.GetInt64()).ToArray();
+            uint[] expectedValues = nativeValues
+                .Select(value => unchecked((uint)value.GetInt64()))
+                .ToArray();
 
             Assert.Equal(managedFields.Length, expectedValues.Length);
             for (int index = 0; index < managedFields.Length; index++)
             {
-                long managedValue = Convert.ToInt64(
+                uint managedValue = unchecked((uint)Convert.ToInt64(
                     managedFields[index].GetValue(null),
-                    CultureInfo.InvariantCulture);
+                    CultureInfo.InvariantCulture));
                 Assert.True(
                     managedValue == expectedValues[index],
-                    $"{nativeName}.{managedFields[index].Name}: native {expectedValues[index]}, managed {managedValue}");
+                    $"{nativeName}.{managedFields[index].Name}: " +
+                    $"native 0x{expectedValues[index]:X8}, managed 0x{managedValue:X8}");
             }
         }
     }

@@ -28,4 +28,17 @@ public sealed class CloudFilesExceptionTests
         Assert.Equal(genericFailureHResult, exception.HResult);
         Assert.Null(exception.Win32ErrorCode);
     }
+
+    [Fact]
+    public void FromHResultPreservesAssociatedPath()
+    {
+        const int accessDeniedHResult = unchecked((int)0x80070005);
+        const string path = @"C:\Cloud";
+
+        CloudFilesException exception =
+            CloudFilesException.FromHResult("CloudSyncRoot.Register", path, accessDeniedHResult);
+
+        Assert.Equal(path, exception.Path);
+        Assert.Contains(path, exception.Message, StringComparison.Ordinal);
+    }
 }

@@ -48,10 +48,16 @@ public sealed class CloudFilesException : Exception
     {
     }
 
-    private CloudFilesException(string operation, int hresult, string message, Exception? innerException)
+    private CloudFilesException(
+        string operation,
+        string? path,
+        int hresult,
+        string message,
+        Exception? innerException)
         : base(message, innerException)
     {
         Operation = operation;
+        Path = path;
         HResult = hresult;
     }
 
@@ -64,6 +70,13 @@ public sealed class CloudFilesException : Exception
     /// </value>
     public string? Operation { get; }
 
+    /// <summary>Gets the file-system path associated with the failed operation, when available.</summary>
+    /// <value>
+    /// The normalized path supplied by the high-level operation, or <see langword="null"/> when
+    /// the failure is not associated with one path.
+    /// </value>
+    public string? Path { get; }
+
     /// <summary>
     /// Gets the Win32 error code embedded in the native <c>HRESULT</c>, when applicable.
     /// </summary>
@@ -74,14 +87,17 @@ public sealed class CloudFilesException : Exception
     public int? Win32ErrorCode =>
         (HResult & FacilityWin32Mask) == HResultFromWin32Prefix ? HResult & 0xFFFF : null;
 
-    internal static CloudFilesException FromHResult(string operation, int hresult)
+    internal static CloudFilesException FromHResult(string operation, int hresult) =>
+        FromHResult(operation, path: null, hresult);
+
+    internal static CloudFilesException FromHResult(string operation, string? path, int hresult)
     {
         Exception? nativeException = Marshal.GetExceptionForHR(hresult);
         string nativeMessage = nativeException?.Message ?? "The operating system reported an unknown failure.";
-        string message =
-            $"Cloud Files operation '{operation}' failed with HRESULT 0x{unchecked((uint)hresult):X8}: " +
-            nativeMessage;
+        string pathContext = path is null ? string.Empty : $" for path '{path}'";
+        string message = $"Cloud Files operation '{operation}'{pathContext} failed with HRESULT " +
+            $"0x{unchecked((uint)hresult):X8}: {nativeMessage}";
 
-        return new CloudFilesException(operation, hresult, message, nativeException);
+        return new CloudFilesException(operation, path, hresult, message, nativeException);
     }
 }

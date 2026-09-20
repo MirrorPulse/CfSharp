@@ -17,7 +17,31 @@ The project is designed around two packages:
 
 ## Status
 
-CfSharp is in the design and repository-bootstrap stage. No production package has been released.
+CfSharp is under active development. Platform discovery and persistent sync-root registration,
+query, update, and unregistration are implemented. Provider callbacks, placeholder transfer,
+and the complete file-system facade are not yet ready. No production package has been released.
+
+## Sync Root Lifecycle
+
+```csharp
+SyncRootRegistrationOptions registration =
+    SyncRootRegistrationOptions.CreateBuilder("Example Cloud", "1.0.0")
+        .WithProviderId(providerId)
+        .WithSyncRootIdentity(accountIdentity)
+        .WithHydrationPolicy(
+            CloudHydrationPolicy.Progressive,
+            CloudHydrationPolicyModifiers.AutoDehydrationAllowed)
+        .WithPopulationPolicy(CloudPopulationPolicy.Partial)
+        .WithRootMarkedInSync()
+        .Build();
+
+CloudSyncRoot root = CloudSyncRoot.Register(localDirectory, registration);
+CloudSyncRootInfo current = root.GetInfo();
+```
+
+Registration is persistent and does not end when the process exits. `Unregister()` is an
+explicit account-removal or uninstall operation: Windows traverses the tree and may delete
+placeholder content that is not locally complete. It must not be used as routine session cleanup.
 
 ## Platform
 

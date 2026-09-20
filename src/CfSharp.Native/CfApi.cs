@@ -623,6 +623,212 @@ public static partial class CfApi
         CfSetInSyncFlags inSyncFlags,
         long* inSyncUsn);
 
+    /// <summary>Associates a provider-selected correlation vector with a placeholder.</summary>
+    /// <param name="fileHandle">Open Win32 handle to the placeholder.</param>
+    /// <param name="correlationVector">
+    /// Pointer to a caller-owned initialized vector. The pointer need remain valid only until the
+    /// call returns because Windows copies the value.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. An uninitialized or malformed vector is
+    /// rejected with the HRESULT form of <c>ERROR_INVALID_PARAMETER</c>.
+    /// </returns>
+    /// <remarks>
+    /// Correlation vectors are optional telemetry state. Providers commonly retrieve the vector
+    /// assigned by Windows, increment its final clock component, and write the new value back.
+    /// Calls that coordinate updates to one file require caller synchronization.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfSetCorrelationVector))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfSetCorrelationVector(
+        nint fileHandle,
+        CfCorrelationVector* correlationVector);
+
+    /// <summary>Retrieves the correlation vector currently associated with a placeholder.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle with read-data or write-DAC access to the placeholder.
+    /// </param>
+    /// <param name="correlationVector">Pointer to caller-owned storage receiving the vector.</param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// Windows can assign the initial vector when the file is first opened. A successful query can
+    /// return a zero-initialized vector before assignment; callers must inspect
+    /// <see cref="CfCorrelationVector.Version"/>. The returned structure owns no external memory
+    /// and can be copied after the function returns.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetCorrelationVector))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfGetCorrelationVector(
+        nint fileHandle,
+        CfCorrelationVector* correlationVector);
+
+    /// <summary>Infers Cloud Files state from Win32 file attributes and a reparse tag.</summary>
+    /// <param name="fileAttributes">Win32 file attribute bits.</param>
+    /// <param name="reparseTag">Win32 reparse tag for the item.</param>
+    /// <returns>
+    /// A set of placeholder-state flags, or <see cref="CfPlaceholderState.Invalid"/> when the
+    /// supplied values cannot be interpreted.
+    /// </returns>
+    /// <remarks>
+    /// This function performs no I/O and returns state directly rather than an <c>HRESULT</c>.
+    /// The inputs can be obtained from file attribute-tag information or directory find data.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderStateFromAttributeTag), SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public static partial CfPlaceholderState CfGetPlaceholderStateFromAttributeTag(
+        uint fileAttributes,
+        uint reparseTag);
+
+    /// <summary>Infers Cloud Files state from a buffer returned by a Win32 file-information query.</summary>
+    /// <param name="infoBuffer">
+    /// Pointer to file information returned by <c>GetFileInformationByHandleEx</c>.
+    /// </param>
+    /// <param name="infoClass">
+    /// Numeric Win32 <c>FILE_INFO_BY_HANDLE_CLASS</c> value describing
+    /// <paramref name="infoBuffer"/>. Unsupported classes return invalid state and set last error.
+    /// </param>
+    /// <returns>
+    /// A set of placeholder-state flags, or <see cref="CfPlaceholderState.Invalid"/> on failure.
+    /// </returns>
+    /// <remarks>The input buffer is borrowed for the duration of the call and is never retained.</remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderStateFromFileInfo), SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the generic Win32 information buffer.")]
+    public static unsafe partial CfPlaceholderState CfGetPlaceholderStateFromFileInfo(
+        void* infoBuffer,
+        int infoClass);
+
+    /// <summary>Infers Cloud Files state from Unicode Win32 directory find data.</summary>
+    /// <param name="findData">
+    /// Pointer to caller-owned <see cref="CfWin32FindData"/> obtained from a Unicode Win32 find
+    /// operation. The pointer is borrowed only for this call.
+    /// </param>
+    /// <returns>
+    /// A set of placeholder-state flags, or <see cref="CfPlaceholderState.Invalid"/> on failure.
+    /// </returns>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderStateFromFindData), SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial CfPlaceholderState CfGetPlaceholderStateFromFindData(
+        CfWin32FindData* findData);
+
+    /// <summary>Retrieves state, identifiers, storage accounting, and identity for a placeholder.</summary>
+    /// <param name="fileHandle">Open Win32 handle requiring only read-attributes access.</param>
+    /// <param name="infoClass">Selects the basic or standard variable-length result.</param>
+    /// <param name="infoBuffer">Pointer to caller-owned writable result storage.</param>
+    /// <param name="infoBufferLength">Capacity of <paramref name="infoBuffer"/> in bytes.</param>
+    /// <param name="returnedLength">
+    /// Optional pointer receiving the number of bytes written or required by the result.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. If the buffer is too small, Windows can
+    /// return a partial result together with the HRESULT form of <c>ERROR_MORE_DATA</c>.
+    /// </returns>
+    /// <remarks>
+    /// The fixed structure selected by <paramref name="infoClass"/> ends with a variable-length
+    /// identity. The function is observational, retains no memory, and may execute concurrently
+    /// with other read-only queries subject to ordinary handle lifetime rules.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderInfo))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the variable-length native result.")]
+    public static unsafe partial int CfGetPlaceholderInfo(
+        nint fileHandle,
+        CfPlaceholderInfoClass infoClass,
+        void* infoBuffer,
+        uint infoBufferLength,
+        uint* returnedLength);
+
+    /// <summary>Retrieves on-disk, validated, or modified byte ranges for a placeholder.</summary>
+    /// <param name="fileHandle">Open Win32 handle requiring only read-attributes access.</param>
+    /// <param name="infoClass">Category of ranges to return.</param>
+    /// <param name="startingOffset">First byte included in the query.</param>
+    /// <param name="length">
+    /// Query length in bytes, or <see cref="EndOfFile"/> to query through logical end of file.
+    /// </param>
+    /// <param name="infoBuffer">Pointer to writable storage for an array of <see cref="CfFileRange"/>.</param>
+    /// <param name="infoBufferLength">Capacity of <paramref name="infoBuffer"/> in bytes.</param>
+    /// <param name="returnedLength">Optional pointer receiving the number of bytes written.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. The HRESULT forms of
+    /// <c>ERROR_MORE_DATA</c> and <c>ERROR_HANDLE_EOF</c> are part of normal range enumeration.
+    /// </returns>
+    /// <remarks>The function is observational and retains no caller-owned memory.</remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderRangeInfo))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the variable-length native result.")]
+    public static unsafe partial int CfGetPlaceholderRangeInfo(
+        nint fileHandle,
+        CfPlaceholderRangeInfoClass infoClass,
+        long startingOffset,
+        long length,
+        void* infoBuffer,
+        uint infoBufferLength,
+        uint* returnedLength);
+
+    /// <summary>Retrieves placeholder ranges by callback identity without opening the file.</summary>
+    /// <param name="connectionKey">Provider connection from the callback.</param>
+    /// <param name="transferKey">Transfer stream from the callback or <see cref="CfGetTransferKey"/>.</param>
+    /// <param name="fileId">Volume-wide file identifier supplied with the callback.</param>
+    /// <param name="infoClass">Category of ranges to return.</param>
+    /// <param name="startingOffset">First byte included in the query.</param>
+    /// <param name="rangeLength">
+    /// Query length in bytes, or <see cref="EndOfFile"/> to query through logical end of file.
+    /// </param>
+    /// <param name="infoBuffer">Pointer to writable storage for an array of <see cref="CfFileRange"/>.</param>
+    /// <param name="infoBufferSize">Capacity of <paramref name="infoBuffer"/> in bytes.</param>
+    /// <param name="infoBufferWritten">Optional pointer receiving the number of bytes written.</param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// This path bypasses file-system filter stacks that could deadlock a fetch callback. Before
+    /// calling it, verify that <see cref="CfPlatformInfo.IntegrationNumber"/> is at least
+    /// <c>0x600</c>. For queries outside a callback, prefer <see cref="CfGetPlaceholderRangeInfo"/>.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderRangeInfoForHydration))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the callback-key native contract.")]
+    public static unsafe partial int CfGetPlaceholderRangeInfoForHydration(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        long fileId,
+        CfPlaceholderRangeInfoClass infoClass,
+        long startingOffset,
+        long rangeLength,
+        void* infoBuffer,
+        uint infoBufferSize,
+        uint* infoBufferWritten);
+
     /// <summary>
     /// Connects a registered sync root to a provider callback table.
     /// </summary>

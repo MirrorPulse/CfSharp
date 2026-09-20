@@ -1,11 +1,17 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using CfSharp.Native;
 
 namespace CfSharp.IntegrationTests;
 
-public sealed class PlaceholderCreationTests
+public sealed partial class PlaceholderCreationTests
 {
+    private const int InvalidArgumentHResult = unchecked((int)0x80070057);
+    private const int FileAttributeTagInformationClass = 9;
+    private const uint FileAttributeReparsePoint = 0x00000400;
+
     [Fact]
     [SupportedOSPlatform("windows10.0.16299")]
     public unsafe void CreateOnlineOnlyPlaceholderAppliesExpectedMetadata()
@@ -287,6 +293,8 @@ public sealed class PlaceholderCreationTests
                     null);
                 Assert.Equal(0, updateResult);
             }
+
+            VerifyPlaceholderInformation(win32Handle, replacementIdentity);
         }
         finally
         {
@@ -298,4 +306,111 @@ public sealed class PlaceholderCreationTests
             CfApi.CfCloseHandle(protectedHandle);
         }
     }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe void VerifyPlaceholderInformation(
+        nint win32Handle,
+        byte[] expectedIdentity)
+    {
+        const int bufferSize = 64 + CfApi.MaxFileIdentityLength;
+        byte* infoBuffer = stackalloc byte[bufferSize];
+        uint returnedLength;
+        int standardResult = CfApi.CfGetPlaceholderInfo(
+            win32Handle,
+            CfPlaceholderInfoClass.Standard,
+            infoBuffer,
+            bufferSize,
+            &returnedLength);
+        Assert.Equal(0, standardResult);
+        Assert.True(returnedLength >= 60u + expectedIdentity.Length);
+
+        CfPlaceholderStandardInfo* standardInfo = (CfPlaceholderStandardInfo*)infoBuffer;
+        Assert.Equal(CfPinState.Unpinned, standardInfo->PinState);
+        Assert.Equal(CfInSyncState.InSync, standardInfo->InSyncState);
+        Assert.NotEqual(0, standardInfo->FileId);
+        Assert.NotEqual(0, standardInfo->SyncRootFileId);
+        long standardFileId = standardInfo->FileId;
+        Assert.Equal((uint)expectedIdentity.Length, standardInfo->FileIdentityLength);
+        Assert.True(new ReadOnlySpan<byte>(
+            standardInfo->FileIdentity,
+            checked((int)standardInfo->FileIdentityLength)).SequenceEqual(expectedIdentity));
+
+        int basicResult = CfApi.CfGetPlaceholderInfo(
+            win32Handle,
+            CfPlaceholderInfoClass.Basic,
+            infoBuffer,
+            bufferSize,
+            &returnedLength);
+        Assert.Equal(0, basicResult);
+        CfPlaceholderBasicInfo* basicInfo = (CfPlaceholderBasicInfo*)infoBuffer;
+        Assert.Equal(standardFileId, basicInfo->FileId);
+        Assert.Equal((uint)expectedIdentity.Length, basicInfo->FileIdentityLength);
+
+        FileAttributeTagInfo attributeTagInfo;
+        int fileInfoResult = GetFileInformationByHandleEx(
+            win32Handle,
+            FileAttributeTagInformationClass,
+            &attributeTagInfo,
+            (uint)sizeof(FileAttributeTagInfo));
+        Assert.NotEqual(0, fileInfoResult);
+
+        CfPlaceholderState stateFromAttributes = CfApi.CfGetPlaceholderStateFromAttributeTag(
+            attributeTagInfo.FileAttributes,
+            attributeTagInfo.ReparseTag);
+        CfPlaceholderState stateFromFileInfo = CfApi.CfGetPlaceholderStateFromFileInfo(
+            &attributeTagInfo,
+            FileAttributeTagInformationClass);
+        CfWin32FindData findData = new()
+        {
+            FileAttributes = attributeTagInfo.FileAttributes,
+            Reserved0 = attributeTagInfo.ReparseTag,
+        };
+        CfPlaceholderState stateFromFindData = CfApi.CfGetPlaceholderStateFromFindData(&findData);
+
+        Assert.NotEqual(CfPlaceholderState.Invalid, stateFromAttributes);
+        Assert.Equal(stateFromAttributes, stateFromFileInfo);
+        Assert.Equal(stateFromAttributes, stateFromFindData);
+        if ((attributeTagInfo.FileAttributes & FileAttributeReparsePoint) == 0 ||
+            attributeTagInfo.ReparseTag == 0)
+        {
+            Assert.Equal(CfPlaceholderState.None, stateFromAttributes);
+        }
+        else
+        {
+            Assert.True(stateFromAttributes.HasFlag(CfPlaceholderState.Placeholder));
+        }
+
+        CfCorrelationVector correlationVector;
+        int getCorrelationResult = CfApi.CfGetCorrelationVector(win32Handle, &correlationVector);
+        Assert.Equal(0, getCorrelationResult);
+        if (correlationVector.Version == 0)
+        {
+            Assert.Equal(0, correlationVector.Vector[0]);
+        }
+        else
+        {
+            Assert.True(correlationVector.Version is 1 or 2);
+            Assert.NotEqual(0, correlationVector.Vector[0]);
+        }
+
+        int setCorrelationResult = CfApi.CfSetCorrelationVector(win32Handle, &correlationVector);
+        Assert.Equal(
+            correlationVector.Version == 0 ? InvalidArgumentHResult : 0,
+            setCorrelationResult);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo
+    {
+        internal uint FileAttributes;
+        internal uint ReparseTag;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe partial int GetFileInformationByHandleEx(
+        nint fileHandle,
+        int fileInformationClass,
+        void* fileInformation,
+        uint bufferSize);
 }

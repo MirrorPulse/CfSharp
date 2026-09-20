@@ -59,7 +59,7 @@ public sealed class ProviderHydrationTests
             Assert.Equal(expected, actual);
             Assert.NotEqual(0, placeholder.CreateUsn);
 
-            DehydrateAndExplicitlyHydrate(placeholder.Path);
+            DehydrateAndExplicitlyHydrate(placeholder.Path, expected.Length);
             Assert.Equal(expected, await File.ReadAllBytesAsync(placeholder.Path));
 
             await session.DisposeAsync();
@@ -94,7 +94,9 @@ public sealed class ProviderHydrationTests
     }
 
     [SupportedOSPlatform("windows10.0.16299")]
-    private static unsafe void DehydrateAndExplicitlyHydrate(string placeholderPath)
+    private static unsafe void DehydrateAndExplicitlyHydrate(
+        string placeholderPath,
+        long expectedLength)
     {
         nint protectedHandle = OpenProtectedHandle(
             placeholderPath,
@@ -129,6 +131,7 @@ public sealed class ProviderHydrationTests
                 CfDehydrateFlags.None,
                 null);
             Assert.Equal(0, dehydrateResult);
+            AssertNoOnDiskRanges(win32Handle);
         }
         finally
         {
@@ -155,6 +158,7 @@ public sealed class ProviderHydrationTests
                 CfHydrateFlags.None,
                 null);
             Assert.Equal(0, hydrateResult);
+            AssertHydratedRange(win32Handle, expectedLength);
         }
         finally
         {
@@ -165,6 +169,46 @@ public sealed class ProviderHydrationTests
 
             CfApi.CfCloseHandle(protectedHandle);
         }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe void AssertNoOnDiskRanges(nint win32Handle)
+    {
+        CfFileRange* ranges = stackalloc CfFileRange[8];
+        uint returnedLength;
+        int result = CfApi.CfGetPlaceholderRangeInfo(
+            win32Handle,
+            CfPlaceholderRangeInfoClass.OnDisk,
+            0,
+            CfApi.EndOfFile,
+            ranges,
+            8u * (uint)sizeof(CfFileRange),
+            &returnedLength);
+
+        Assert.Equal(0, result);
+        Assert.Equal(0u, returnedLength);
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe void AssertHydratedRange(nint win32Handle, long expectedLength)
+    {
+        CfFileRange* ranges = stackalloc CfFileRange[8];
+        uint returnedLength;
+        int result = CfApi.CfGetPlaceholderRangeInfo(
+            win32Handle,
+            CfPlaceholderRangeInfoClass.OnDisk,
+            0,
+            CfApi.EndOfFile,
+            ranges,
+            8u * (uint)sizeof(CfFileRange),
+            &returnedLength);
+
+        Assert.Equal(0, result);
+        Assert.True(returnedLength >= sizeof(CfFileRange));
+        int rangeCount = checked((int)(returnedLength / (uint)sizeof(CfFileRange)));
+        Assert.Contains(
+            new Span<CfFileRange>(ranges, rangeCount).ToArray(),
+            range => range.StartingOffset == 0 && range.Length >= expectedLength);
     }
 
     [SupportedOSPlatform("windows10.0.16299")]

@@ -79,7 +79,19 @@ int main()
               << "  \"cfDehydrateFlagBackground\": " << CF_DEHYDRATE_FLAG_BACKGROUND << ",\n"
               << "  \"cfPinStateInherit\": " << CF_PIN_STATE_INHERIT << ",\n"
               << "  \"cfSetPinFlagRecurseStopOnError\": " << CF_SET_PIN_FLAG_RECURSE_STOP_ON_ERROR << ",\n"
-              << "  \"cfInSyncStateInSync\": " << CF_IN_SYNC_STATE_IN_SYNC << "\n"
+              << "  \"cfInSyncStateInSync\": " << CF_IN_SYNC_STATE_IN_SYNC << ",\n"
+              << "  \"cfPlaceholderBasicInfoSize\": " << sizeof(CF_PLACEHOLDER_BASIC_INFO) << ",\n"
+              << "  \"cfPlaceholderBasicInfoIdentityOffset\": " << offsetof(CF_PLACEHOLDER_BASIC_INFO, FileIdentity) << ",\n"
+              << "  \"cfPlaceholderStandardInfoSize\": " << sizeof(CF_PLACEHOLDER_STANDARD_INFO) << ",\n"
+              << "  \"cfPlaceholderStandardInfoIdentityOffset\": " << offsetof(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity) << ",\n"
+              << "  \"cfCorrelationVectorSize\": " << sizeof(CORRELATION_VECTOR) << ",\n"
+              << "  \"cfCorrelationVectorValueOffset\": " << offsetof(CORRELATION_VECTOR, Vector) << ",\n"
+              << "  \"win32FindDataWSize\": " << sizeof(WIN32_FIND_DATAW) << ",\n"
+              << "  \"win32FindDataWReparseTagOffset\": " << offsetof(WIN32_FIND_DATAW, dwReserved0) << ",\n"
+              << "  \"win32FindDataWFileNameOffset\": " << offsetof(WIN32_FIND_DATAW, cFileName) << ",\n"
+              << "  \"cfPlaceholderInfoClassStandard\": " << CF_PLACEHOLDER_INFO_STANDARD << ",\n"
+              << "  \"cfPlaceholderRangeInfoModified\": " << CF_PLACEHOLDER_RANGE_INFO_MODIFIED << ",\n"
+              << "  \"cfPlaceholderStatePartiallyOnDisk\": " << CF_PLACEHOLDER_STATE_PARTIALLY_ON_DISK << "\n"
               << "}\n";
 
     return 0;

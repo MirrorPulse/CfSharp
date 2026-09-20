@@ -89,6 +89,18 @@ public sealed class AbiProbeComparisonTests
         AssertProbe(probe, "cfPinStateInherit", (int)CfPinState.Inherit);
         AssertProbe(probe, "cfSetPinFlagRecurseStopOnError", (uint)CfSetPinFlags.RecurseStopOnError);
         AssertProbe(probe, "cfInSyncStateInSync", (int)CfInSyncState.InSync);
+        AssertProbe(probe, "cfPlaceholderBasicInfoSize", Marshal.SizeOf<CfPlaceholderBasicInfo>());
+        AssertOffset<CfPlaceholderBasicInfo>(probe, "cfPlaceholderBasicInfoIdentityOffset", nameof(CfPlaceholderBasicInfo.FileIdentity));
+        AssertProbe(probe, "cfPlaceholderStandardInfoSize", Marshal.SizeOf<CfPlaceholderStandardInfo>());
+        AssertOffset<CfPlaceholderStandardInfo>(probe, "cfPlaceholderStandardInfoIdentityOffset", nameof(CfPlaceholderStandardInfo.FileIdentity));
+        AssertProbe(probe, "cfCorrelationVectorSize", Marshal.SizeOf<CfCorrelationVector>());
+        AssertOffset<CfCorrelationVector>(probe, "cfCorrelationVectorValueOffset", nameof(CfCorrelationVector.Vector));
+        AssertProbe(probe, "win32FindDataWSize", Marshal.SizeOf<CfWin32FindData>());
+        AssertOffset<CfWin32FindData>(probe, "win32FindDataWReparseTagOffset", nameof(CfWin32FindData.Reserved0));
+        AssertOffset<CfWin32FindData>(probe, "win32FindDataWFileNameOffset", nameof(CfWin32FindData.FileName));
+        AssertProbe(probe, "cfPlaceholderInfoClassStandard", (int)CfPlaceholderInfoClass.Standard);
+        AssertProbe(probe, "cfPlaceholderRangeInfoModified", (int)CfPlaceholderRangeInfoClass.Modified);
+        AssertProbe(probe, "cfPlaceholderStatePartiallyOnDisk", (uint)CfPlaceholderState.PartiallyOnDisk);
     }
 
     private static void AssertOffset<T>(

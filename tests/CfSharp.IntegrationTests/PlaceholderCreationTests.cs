@@ -8,7 +8,6 @@ namespace CfSharp.IntegrationTests;
 
 public sealed partial class PlaceholderCreationTests
 {
-    private const int InvalidArgumentHResult = unchecked((int)0x80070057);
     private const int FileAttributeTagInformationClass = 9;
     private const uint FileAttributeReparsePoint = 0x00000400;
 
@@ -394,9 +393,14 @@ public sealed partial class PlaceholderCreationTests
         }
 
         int setCorrelationResult = CfApi.CfSetCorrelationVector(win32Handle, &correlationVector);
-        Assert.Equal(
-            correlationVector.Version == 0 ? InvalidArgumentHResult : 0,
-            setCorrelationResult);
+        if (correlationVector.Version == 0)
+        {
+            Assert.True(setCorrelationResult < 0);
+        }
+        else
+        {
+            Assert.Equal(0, setCorrelationResult);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

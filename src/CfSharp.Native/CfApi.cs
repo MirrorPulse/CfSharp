@@ -631,7 +631,7 @@ public static partial class CfApi
     /// </param>
     /// <returns>
     /// The native <c>HRESULT</c> without translation. An uninitialized or malformed vector is
-    /// rejected with the HRESULT form of <c>ERROR_INVALID_PARAMETER</c>.
+    /// rejected, but the specific failure code can differ between supported Windows versions.
     /// </returns>
     /// <remarks>
     /// Correlation vectors are optional telemetry state. Providers commonly retrieve the vector

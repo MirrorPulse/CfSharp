@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>CfSharp.Storage.Sqlite</PackageId>
+    <Description>Official SQLite durable-state provider for CfSharp.</Description>
+    <PackageTags>windows;cloud-files;cfapi;sqlite;persistence</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CfSharp\CfSharp.csproj" />
+  </ItemGroup>
+</Project>

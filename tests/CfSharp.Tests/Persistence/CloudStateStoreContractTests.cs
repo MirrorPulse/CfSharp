@@ -78,6 +78,16 @@ public abstract class CloudStateStoreContractTests
 
         await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
         {
+            await write.Items.UpsertAsync(
+                new CloudItemState(
+                    itemId,
+                    "remote-atomic",
+                    "file.txt",
+                    CloudItemKind.File,
+                    null,
+                    null,
+                    false,
+                    now));
             await write.Checkpoints.UpsertAsync(new CloudStateCheckpoint("remote", [1, 2], now));
             CloudOperationJournalEntry queued = await write.Operations.EnqueueAsync(
                 new CloudOperationJournalEntry(
@@ -260,7 +270,7 @@ public abstract class CloudStateStoreContractTests
             await store.BeginTransactionAsync(cancellation.Token));
     }
 
-    private static CloudStateStoreContext CreateContext() =>
+    protected virtual CloudStateStoreContext CreateContext() =>
         new(Path.Combine(Path.GetTempPath(), "CfSharp-contract", Guid.NewGuid().ToString("N")));
 
     private static void AssertItem(CloudItemState expected, CloudItemState? actual)

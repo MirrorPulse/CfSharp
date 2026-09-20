@@ -39,6 +39,9 @@ jobs:
       - name: Pack high-level library
         run: dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build --output artifacts/packages
 
+      - name: Pack SQLite state provider
+        run: dotnet pack src/CfSharp.Storage.Sqlite/CfSharp.Storage.Sqlite.csproj --configuration Release --no-build --output artifacts/packages
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

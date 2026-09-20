@@ -2,19 +2,31 @@
 
 CfSharp is a Windows-only .NET library for the Windows Cloud Files API (`cfapi.h` and `CldApi.dll`).
 
-The project currently contains two core packages:
+The project currently contains three packages:
 
 - `CfSharp.Native` provides complete, ABI-accurate native bindings.
 - `CfSharp` provides a safe, idiomatic file-system API for sync providers.
-
-An optional `CfSharp.Storage.Sqlite` package is planned as the official durable-state
-implementation. Applications will explicitly provide its database path or replace it with a
-custom transactional state store; the core library will never choose a hidden storage location.
+- `CfSharp.Storage.Sqlite` provides the optional official durable-state implementation.
 
 The high-level package defines `ICloudStateStoreFactory`, `ICloudStateStore`, and
 `ICloudStateTransaction` so custom backends can participate without taking a SQLite dependency.
 Transactions expose focused repositories for item mappings, checkpoints, local operations,
 conflicts, remote-batch progress, and echo suppression. Disposal without commit rolls back.
+
+The SQLite provider requires an explicit absolute database path outside the managed sync root:
+
+```csharp
+ICloudStateStoreFactory stateStoreFactory = new SqliteCloudStateStoreFactory(
+    @"C:\ProgramData\ExampleProvider\Accounts\account-42\cfsharp.db");
+
+CloudStateStoreContext context = new(@"C:\Users\Example\Example Cloud");
+await using ICloudStateStore store = await stateStoreFactory.OpenAsync(context);
+```
+
+One database is bound to one sync root and has one active CfSharp owner. The provider uses
+transactions, foreign keys, WAL mode, and a bounded lock wait. Applications may replace it with
+any implementation of the core state interfaces that satisfies the same transactional contract.
+The state database stores synchronization coordination metadata, never file content or secrets.
 
 ## Goals
 
@@ -28,9 +40,9 @@ conflicts, remote-batch progress, and echo suppression. Disposal without commit 
 
 CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, and
 native callback, placeholder creation, and transfer primitives are implemented. A safe managed
-provider session can hydrate file content on demand. Namespace callbacks, the complete
-file-system facade, and the SQLite state provider are not yet ready. No production package has
-been released.
+provider session can hydrate file content on demand. The transactional state contracts and the
+official SQLite provider are implemented. Namespace callbacks and the complete file-system
+facade are not yet ready. No production package has been released.
 
 ## Sync Root Lifecycle
 
@@ -82,6 +94,7 @@ dotnet build CfSharp.sln --configuration Release --no-restore
 dotnet test CfSharp.sln --configuration Release --no-build
 dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build
 dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build
+dotnet pack src/CfSharp.Storage.Sqlite/CfSharp.Storage.Sqlite.csproj --configuration Release --no-build
 ```
 
 The native ABI probe under `tests/CfSharp.Native.AbiProbe` additionally requires the Microsoft Visual C++ Build Tools.

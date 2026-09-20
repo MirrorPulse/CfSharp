@@ -1000,4 +1000,85 @@ public static partial class CfApi
     public static partial int CfQuerySyncProviderStatus(
         CfConnectionKey connectionKey,
         out CfSyncProviderStatus providerStatus);
+
+    /// <summary>Stores or clears rich provider status for a registered sync root.</summary>
+    /// <param name="syncRootPath">Pointer to the null-terminated UTF-16 registered root path.</param>
+    /// <param name="syncStatus">
+    /// Pointer to one caller-owned contiguous <see cref="CfSyncStatus"/> buffer, or null to clear
+    /// the status previously stored for the root.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A failed call leaves any previously stored
+    /// status unchanged.
+    /// </returns>
+    /// <remarks>
+    /// Windows copies a successful non-null report and remembers it until explicitly cleared or
+    /// the machine restarts. Neither pointer is retained after this call returns. Calls for the
+    /// same root should be serialized when their ordering matters.
+    /// </remarks>
+    /// <seealso href="https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfreportsyncstatus"/>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReportSyncStatus))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.17134")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfReportSyncStatus(
+        char* syncRootPath,
+        CfSyncStatus* syncStatus);
+
+    /// <summary>Reports out-of-band progress for an active hydration request.</summary>
+    /// <param name="connectionKey">Connection on which the fetch-data request was received.</param>
+    /// <param name="transferKey">Transfer stream supplied with the fetch-data callback.</param>
+    /// <param name="providerProgressTotal">Total provider work represented by this report.</param>
+    /// <param name="providerProgressCompleted">Provider work completed so far.</param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// Reporting progress resets the request's 60-second timeout while the provider performs work
+    /// before transferring data. Keys are copied by value and no caller memory is retained. Calls
+    /// for independent requests may run concurrently.
+    /// </remarks>
+    /// <seealso href="https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfreportproviderprogress"/>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReportProviderProgress))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
+    public static partial int CfReportProviderProgress(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        long providerProgressTotal,
+        long providerProgressCompleted);
+
+    /// <summary>Reports out-of-band progress for a specific Cloud Files request and session.</summary>
+    /// <param name="connectionKey">Connection on which the request was received.</param>
+    /// <param name="transferKey">Transfer stream supplied with the callback.</param>
+    /// <param name="requestKey">Specific callback request whose progress is being reported.</param>
+    /// <param name="providerProgressTotal">Total provider work represented by this report.</param>
+    /// <param name="providerProgressCompleted">Provider work completed so far.</param>
+    /// <param name="targetSessionId">Windows session that receives the progress information.</param>
+    /// <returns>The native <c>HRESULT</c> without translation.</returns>
+    /// <remarks>
+    /// This Windows 10 version 1809 extension can identify non-hydration operations through
+    /// <paramref name="requestKey"/>. All keys are copied by value and no caller memory is retained.
+    /// Calls for independent requests may run concurrently.
+    /// </remarks>
+    /// <seealso href="https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfreportproviderprogress2"/>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReportProviderProgress2))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.17763")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
+    public static partial int CfReportProviderProgress2(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        CfRequestKey requestKey,
+        long providerProgressTotal,
+        long providerProgressCompleted,
+        uint targetSessionId);
 }

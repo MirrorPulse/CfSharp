@@ -41,6 +41,11 @@ public sealed class ProviderConnectionTests
             root = CloudSyncRoot.Register(rootPath, options);
             registered = true;
 
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134))
+            {
+                ReportAndClearSyncRootStatus(rootPath);
+            }
+
             CfCallbackRegistration* callbackTable = stackalloc CfCallbackRegistration[2];
             callbackTable[0] = new CfCallbackRegistration
             {
@@ -77,6 +82,25 @@ public sealed class ProviderConnectionTests
                 out CfSyncProviderStatus providerStatus);
             Assert.Equal(0, queryStatusResult);
             Assert.True(providerStatus.HasFlag(CfSyncProviderStatus.SyncIncremental));
+
+            int progressResult = CfApi.CfReportProviderProgress(
+                connectionKey,
+                default,
+                100,
+                50);
+            Assert.True(progressResult < 0);
+
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+            {
+                int progress2Result = CfApi.CfReportProviderProgress2(
+                    connectionKey,
+                    default,
+                    default,
+                    100,
+                    50,
+                    0);
+                Assert.True(progress2Result < 0);
+            }
 
             CloudFilesException connectedUnregisterException =
                 Assert.Throws<CloudFilesException>(() => root.Unregister());
@@ -115,6 +139,35 @@ public sealed class ProviderConnectionTests
             {
                 Directory.Delete(rootPath, recursive: true);
             }
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.17134")]
+    private static unsafe void ReportAndClearSyncRootStatus(string rootPath)
+    {
+        const string description = "CfSharp native reporting integration test.";
+        int descriptionLength = checked((description.Length + 1) * sizeof(char));
+        int bufferLength = checked(sizeof(CfSyncStatus) + descriptionLength);
+        byte* buffer = stackalloc byte[bufferLength];
+        new Span<byte>(buffer, bufferLength).Clear();
+
+        CfSyncStatus* status = (CfSyncStatus*)buffer;
+        status->StructSize = checked((uint)bufferLength);
+        status->Code = 0x80000001;
+        status->DescriptionOffset = (uint)sizeof(CfSyncStatus);
+        status->DescriptionLength = checked((uint)descriptionLength);
+
+        description.AsSpan().CopyTo(new Span<char>(
+            (char*)(buffer + status->DescriptionOffset),
+            description.Length));
+
+        fixed (char* rootPathPointer = rootPath)
+        {
+            int reportResult = CfApi.CfReportSyncStatus(rootPathPointer, status);
+            Assert.Equal(0, reportResult);
+
+            int clearResult = CfApi.CfReportSyncStatus(rootPathPointer, null);
+            Assert.Equal(0, clearResult);
         }
     }
 

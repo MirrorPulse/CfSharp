@@ -8,6 +8,8 @@
     "sourceUrl": "https://learn.microsoft.com/windows/win32/api/cfapi/"
   },
   "versionOverrides": {
+    "CF_SYNC_STATUS": "10.0.17134",
+    "CfReportSyncStatus": "10.0.17134",
     "CfReportProviderProgress2": "10.0.17763"
   },
   "capabilityGates": [
@@ -43,9 +45,9 @@
     { "nativeName": "CfRegisterSyncRoot", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfRegisterSyncRoot" },
     { "nativeName": "CfReleaseProtectedHandle", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfReleaseProtectedHandle" },
     { "nativeName": "CfReleaseTransferKey", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfReleaseTransferKey" },
-    { "nativeName": "CfReportProviderProgress", "kind": "function", "status": "pending", "managedSymbol": null },
-    { "nativeName": "CfReportProviderProgress2", "kind": "function", "status": "pending", "managedSymbol": null },
-    { "nativeName": "CfReportSyncStatus", "kind": "function", "status": "pending", "managedSymbol": null },
+    { "nativeName": "CfReportProviderProgress", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfReportProviderProgress" },
+    { "nativeName": "CfReportProviderProgress2", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfReportProviderProgress2" },
+    { "nativeName": "CfReportSyncStatus", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfReportSyncStatus" },
     { "nativeName": "CfRevertPlaceholder", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfRevertPlaceholder" },
     { "nativeName": "CfSetCorrelationVector", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfSetCorrelationVector" },
     { "nativeName": "CfSetInSyncState", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfSetInSyncState" },

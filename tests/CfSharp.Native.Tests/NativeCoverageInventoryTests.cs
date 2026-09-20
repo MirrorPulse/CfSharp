@@ -6,8 +6,8 @@ public sealed class NativeCoverageInventoryTests
 {
     private const int ExpectedSymbolCount = 116;
     private const int ExpectedFunctionCount = 36;
-    private const int ExpectedMappedSymbolCount = 113;
-    private const int ExpectedMappedFunctionCount = 33;
+    private const int ExpectedMappedSymbolCount = 116;
+    private const int ExpectedMappedFunctionCount = 36;
 
     [Fact]
     public void InventoryTracksPinnedHeaderAndCurrentCoverage()
@@ -28,6 +28,12 @@ public sealed class NativeCoverageInventoryTests
         Assert.Equal(
             "10.0.17763",
             root.GetProperty("versionOverrides").GetProperty("CfReportProviderProgress2").GetString());
+        Assert.Equal(
+            "10.0.17134",
+            root.GetProperty("versionOverrides").GetProperty("CfReportSyncStatus").GetString());
+        Assert.Equal(
+            "10.0.17134",
+            root.GetProperty("versionOverrides").GetProperty("CF_SYNC_STATUS").GetString());
         Assert.Equal(4, root.GetProperty("capabilityGates").GetArrayLength());
 
         JsonElement[] entries = symbols.EnumerateArray().ToArray();
@@ -54,6 +60,8 @@ public sealed class NativeCoverageInventoryTests
                 Assert.Equal(JsonValueKind.Null, managedSymbol.ValueKind);
             }
         }
+
+        Assert.All(entries, entry => Assert.Equal("mapped", entry.GetProperty("status").GetString()));
     }
 
     private static bool IsFunction(JsonElement entry) =>

@@ -123,6 +123,39 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         return new CloudDirectory(this, path.FullPath, path.RelativePath);
     }
 
+    internal CloudItem ResolveExistingItem(string relativePath)
+    {
+        EnsureStarted();
+        CloudItemPath path = CloudItemPathResolver.Resolve(
+            SyncRootPath,
+            relativePath,
+            allowRoot: true);
+        if (!File.Exists(path.FullPath) && !Directory.Exists(path.FullPath))
+        {
+            throw new FileNotFoundException(
+                "The local cloud item does not exist.",
+                path.FullPath);
+        }
+
+        FileAttributes attributes = File.GetAttributes(path.FullPath);
+        return CreateItemReference(
+            path.RelativePath,
+            attributes.HasFlag(FileAttributes.Directory)
+                ? CloudItemKind.Directory
+                : CloudItemKind.File);
+    }
+
+    internal CloudItem CreateItemReference(string relativePath, CloudItemKind kind)
+    {
+        CloudItemPath path = CloudItemPathResolver.Resolve(
+            SyncRootPath,
+            relativePath,
+            allowRoot: kind == CloudItemKind.Directory);
+        return kind == CloudItemKind.Directory
+            ? new CloudDirectory(this, path.FullPath, path.RelativePath)
+            : new CloudFile(this, path.FullPath, path.RelativePath);
+    }
+
     /// <summary>Opens all configured process resources and makes the file system ready.</summary>
     /// <param name="cancellationToken">
     /// Token that cancels waiting for lifecycle ownership or opening the state store. Native

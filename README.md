@@ -98,6 +98,30 @@ content availability, pin and in-sync state, opaque placeholder identity, and an
 item mapping. A missing local item is represented by `Exists == false`, allowing a durable
 tombstone to remain visible without inventing file-system state.
 
+Local tree navigation is explicit and side-effect free:
+
+```csharp
+CloudDirectory documents = fileSystem.Root.GetDirectory("Documents");
+CloudItem existing = documents.Resolve("report.pdf");
+
+CloudDirectoryEnumerationOptions textFiles = CloudDirectoryEnumerationOptions
+    .CreateBuilder()
+    .WithSearchPattern("*.txt")
+    .WithEntryKinds(CloudDirectoryEntryKinds.Files)
+    .WithOrder(CloudDirectoryEnumerationOrder.NameAscending)
+    .WithRecursion()
+    .Build();
+
+await foreach (CloudItem item in documents.EnumerateLocalChildrenAsync(textFiles, cancellationToken))
+{
+    // Each result is an immutable path reference; inspect it for fresh state.
+}
+```
+
+Local enumeration never calls the remote content provider or changes the namespace. Recursion is
+opt-in, streams results breadth-first, and never follows directory reparse points. Existing links
+that resolve outside the sync root are rejected rather than traversed.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

@@ -59,6 +59,26 @@ public sealed class CloudFileSystemLifecycleTests
             Assert.True(placeholder.PlaceholderIdentity.Span.SequenceEqual(placeholderIdentity));
             Assert.True(syncRoot.PlaceholderState.HasFlag(CloudPlaceholderState.SyncRoot));
 
+            string localDirectory = Path.Combine(rootPath, "local");
+            Directory.CreateDirectory(localDirectory);
+            await File.WriteAllTextAsync(Path.Combine(localDirectory, "note.txt"), "local");
+            CloudDirectoryEnumerationOptions recursiveText = CloudDirectoryEnumerationOptions
+                .CreateBuilder()
+                .WithSearchPattern("*.txt")
+                .WithEntryKinds(CloudDirectoryEntryKinds.Files)
+                .WithRecursion()
+                .Build();
+            List<CloudItem> localTextFiles = [];
+            await foreach (CloudItem item in fileSystem.Root.EnumerateLocalChildrenAsync(recursiveText))
+            {
+                localTextFiles.Add(item);
+            }
+
+            CloudFile localFile = Assert.IsType<CloudFile>(fileSystem.Root.Resolve(@"local\note.txt"));
+            Assert.Equal(@"local\note.txt", localFile.RelativePath);
+            Assert.Single(localTextFiles);
+            Assert.Equal(localFile.RelativePath, localTextFiles[0].RelativePath);
+
             await fileSystem.DisposeAsync();
 
             Assert.Equal(CloudFileSystemLifecycleState.Disposed, fileSystem.LifecycleState);

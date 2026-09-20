@@ -155,6 +155,129 @@ public sealed class CloudItemTests
         Assert.Equal(1, snapshot.PlaceholderIdentity.Span[0]);
     }
 
+    [Fact]
+    public async Task DirectoryCreatesReferencesAndResolvesExistingKinds()
+    {
+        using TestDirectory root = new();
+        Directory.CreateDirectory(Path.Combine(root.Path, "docs"));
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "docs", "report.txt"), "report");
+        await using CloudFileSystem fileSystem = await StartAsync(root.Path, new InspectionStore());
+
+        CloudDirectory docs = fileSystem.Root.GetDirectory("docs");
+        CloudFile report = docs.GetFile("report.txt");
+        CloudItem resolvedFile = fileSystem.Root.Resolve(@"docs\report.txt");
+        CloudItem resolvedDirectory = fileSystem.Root.Resolve("docs");
+
+        Assert.Equal(@"docs\report.txt", report.RelativePath);
+        Assert.IsType<CloudFile>(resolvedFile);
+        Assert.IsType<CloudDirectory>(resolvedDirectory);
+        Assert.Equal("docs", resolvedFile.Parent?.Name);
+        Assert.Throws<FileNotFoundException>(() => docs.Resolve("missing.txt"));
+    }
+
+    [Fact]
+    public async Task LocalEnumerationFiltersOrdersAndRecursesExplicitly()
+    {
+        using TestDirectory root = new();
+        Directory.CreateDirectory(Path.Combine(root.Path, "nested"));
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "zeta.bin"), "z");
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "alpha.txt"), "a");
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "nested", "beta.txt"), "b");
+        await using CloudFileSystem fileSystem = await StartAsync(root.Path, new InspectionStore());
+
+        IReadOnlyList<CloudItem> topLevel = await CollectAsync(
+            fileSystem.Root.EnumerateLocalChildrenAsync());
+        CloudDirectoryEnumerationOptions recursiveText = CloudDirectoryEnumerationOptions
+            .CreateBuilder()
+            .WithSearchPattern("*.txt")
+            .WithEntryKinds(CloudDirectoryEntryKinds.Files)
+            .WithOrder(CloudDirectoryEnumerationOrder.NameAscending)
+            .WithRecursion()
+            .Build();
+        IReadOnlyList<CloudItem> textFiles = await CollectAsync(
+            fileSystem.Root.EnumerateLocalChildrenAsync(recursiveText));
+
+        Assert.Equal(3, topLevel.Count);
+        Assert.Contains(topLevel, item => item is CloudDirectory && item.Name == "nested");
+        Assert.Contains(topLevel, item => item is CloudFile && item.Name == "alpha.txt");
+        Assert.Contains(topLevel, item => item is CloudFile && item.Name == "zeta.bin");
+        Assert.Equal(2, textFiles.Count);
+        Assert.Equal("alpha.txt", textFiles[0].Name);
+        Assert.Equal("beta.txt", textFiles[1].Name);
+        Assert.Equal(@"nested\beta.txt", textFiles[1].RelativePath);
+    }
+
+    [Fact]
+    public async Task EnumerationIsFreshAndDoesNotFollowDirectoryLinks()
+    {
+        using TestDirectory root = new();
+        string target = Path.Combine(root.Path, "target");
+        Directory.CreateDirectory(target);
+        await File.WriteAllTextAsync(Path.Combine(target, "only-once.txt"), "content");
+        Directory.CreateSymbolicLink(Path.Combine(root.Path, "alias"), target);
+        await using CloudFileSystem fileSystem = await StartAsync(root.Path, new InspectionStore());
+        CloudDirectoryEnumerationOptions recursive = CloudDirectoryEnumerationOptions
+            .CreateBuilder()
+            .WithRecursion()
+            .Build();
+
+        IReadOnlyList<CloudItem> first = await CollectAsync(
+            fileSystem.Root.EnumerateLocalChildrenAsync(recursive));
+        await File.WriteAllTextAsync(Path.Combine(root.Path, "added.txt"), "new");
+        IReadOnlyList<CloudItem> second = await CollectAsync(
+            fileSystem.Root.EnumerateLocalChildrenAsync(recursive));
+
+        Assert.Single(first.Where(item => item.Name == "only-once.txt"));
+        Assert.DoesNotContain(first, item => item.Name == "added.txt");
+        Assert.Contains(second, item => item.Name == "added.txt");
+    }
+
+    [Fact]
+    public async Task EnumerationRejectsLinkedEscapeAndHonorsCancellation()
+    {
+        using TestDirectory root = new();
+        using TestDirectory outside = new();
+        Directory.CreateSymbolicLink(Path.Combine(root.Path, "outside"), outside.Path);
+        await using CloudFileSystem fileSystem = await StartAsync(root.Path, new InspectionStore());
+
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await CollectAsync(fileSystem.Root.EnumerateLocalChildrenAsync()));
+
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await CollectAsync(fileSystem.Root.EnumerateLocalChildrenAsync(
+                cancellationToken: cancellation.Token)));
+    }
+
+    [Fact]
+    public void EnumerationOptionsValidatePatternsKindsAndOrder()
+    {
+        Assert.Throws<ArgumentException>(() => CloudDirectoryEnumerationOptions
+            .CreateBuilder()
+            .WithSearchPattern(@"nested\*.txt"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CloudDirectoryEnumerationOptions
+            .CreateBuilder()
+            .WithEntryKinds((CloudDirectoryEntryKinds)8)
+            .Build());
+        Assert.Throws<ArgumentOutOfRangeException>(() => CloudDirectoryEnumerationOptions
+            .CreateBuilder()
+            .WithOrder((CloudDirectoryEnumerationOrder)10)
+            .Build());
+    }
+
+    private static async Task<IReadOnlyList<CloudItem>> CollectAsync(
+        IAsyncEnumerable<CloudItem> items)
+    {
+        List<CloudItem> result = [];
+        await foreach (CloudItem item in items)
+        {
+            result.Add(item);
+        }
+
+        return result;
+    }
+
     private static async Task<CloudFileSystem> StartAsync(string rootPath, InspectionStore store)
     {
         CloudFileSystem fileSystem = CloudFileSystem

@@ -31,6 +31,9 @@ public static partial class CfApi
     /// <summary>Maximum placeholder file-identity length in bytes.</summary>
     public const int MaxFileIdentityLength = 4096;
 
+    /// <summary>Maximum callback priority hint defined by the Cloud Files API.</summary>
+    public const byte MaxPriorityHint = 15;
+
     /// <summary>
     /// Retrieves version and capability information for the installed Cloud Files platform.
     /// </summary>
@@ -210,4 +213,102 @@ public static partial class CfApi
         void* infoBuffer,
         uint infoBufferLength,
         uint* returnedLength);
+
+    /// <summary>
+    /// Connects a registered sync root to a provider callback table.
+    /// </summary>
+    /// <param name="syncRootPath">Pointer to the null-terminated UTF-16 registered root path.</param>
+    /// <param name="callbackTable">
+    /// Pointer to an array terminated by <see cref="CfCallbackType.None"/>. Windows retains
+    /// access to the array and its function pointers for the complete connection lifetime.
+    /// </param>
+    /// <param name="callbackContext">
+    /// Optional provider-owned context pointer returned in each <see cref="CfCallbackInfo"/>.
+    /// Windows does not own or release the target.
+    /// </param>
+    /// <param name="connectFlags">Flags controlling callback information and hydration behavior.</param>
+    /// <param name="connectionKey">Receives the opaque key for the new connection.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Only one provider may be connected to a given sync root at a time. Callbacks can occur
+    /// concurrently on platform threads as soon as this function succeeds.
+    /// </para>
+    /// <para>
+    /// The path need remain valid only for this call. The callback table, callback entry points,
+    /// and callback context target must remain valid until <see cref="CfDisconnectSyncRoot"/>
+    /// returns. Exceptions must never escape an unmanaged callback entry point.
+    /// </para>
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfConnectSyncRoot))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfConnectSyncRoot(
+        char* syncRootPath,
+        CfCallbackRegistration* callbackTable,
+        void* callbackContext,
+        CfConnectFlags connectFlags,
+        out CfConnectionKey connectionKey);
+
+    /// <summary>Disconnects a provider communication channel from its sync root.</summary>
+    /// <param name="connectionKey">Opaque key returned by <see cref="CfConnectSyncRoot"/>.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>
+    /// Callbacks may still arrive while this function is executing. After it returns, Windows
+    /// no longer invokes the registered callbacks, so the provider may release the callback
+    /// table and context. Unexpected process termination is also detected and cleaned up by
+    /// Windows, but explicit disconnection provides deterministic shutdown.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfDisconnectSyncRoot))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
+    public static partial int CfDisconnectSyncRoot(CfConnectionKey connectionKey);
+
+    /// <summary>Updates the activity or terminal status reported for a connected provider.</summary>
+    /// <param name="connectionKey">Opaque key of the active provider connection.</param>
+    /// <param name="providerStatus">Status flags or terminal state to report.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>The function retains no managed memory and may be called concurrently.</remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfUpdateSyncProviderStatus))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
+    public static partial int CfUpdateSyncProviderStatus(
+        CfConnectionKey connectionKey,
+        CfSyncProviderStatus providerStatus);
+
+    /// <summary>Queries the activity or terminal status of a connected provider.</summary>
+    /// <param name="connectionKey">Opaque key of the active provider connection.</param>
+    /// <param name="providerStatus">Receives the current provider status.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>The function retains no managed memory and may be called concurrently.</remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfQuerySyncProviderStatus))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public static partial int CfQuerySyncProviderStatus(
+        CfConnectionKey connectionKey,
+        out CfSyncProviderStatus providerStatus);
 }

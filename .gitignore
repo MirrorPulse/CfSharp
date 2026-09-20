@@ -1,0 +1,44 @@
+# Local research and working notes
+/draft/
+
+# Build output
+[Bb]in/
+[Oo]bj/
+/artifacts/
+/TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage.xml
+
+# NuGet artifacts
+/packages/
+*.nupkg
+*.snupkg
+
+# IDE and user-specific state
+/.vs/
+/.vscode/
+/.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files and logs
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# Operating-system metadata
+Thumbs.db
+Desktop.ini
+.DS_Store

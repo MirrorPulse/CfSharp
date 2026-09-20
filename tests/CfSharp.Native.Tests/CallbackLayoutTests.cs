@@ -10,6 +10,10 @@ public sealed class CallbackLayoutTests
     {
         AssertLayout<CfConnectionKey>(8,
             (nameof(CfConnectionKey.Internal), 0));
+        AssertLayout<CfTransferKey>(8,
+            (nameof(CfTransferKey.Internal), 0));
+        AssertLayout<CfRequestKey>(8,
+            (nameof(CfRequestKey.Internal), 0));
 
         if (IntPtr.Size == 8)
         {

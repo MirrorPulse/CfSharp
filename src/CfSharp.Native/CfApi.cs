@@ -214,6 +214,44 @@ public static partial class CfApi
         uint infoBufferLength,
         uint* returnedLength);
 
+    /// <summary>Creates one or more placeholder files or directories beneath a sync root.</summary>
+    /// <param name="baseDirectoryPath">
+    /// Pointer to a null-terminated UTF-16 path under a registered sync root. Every entry name
+    /// is interpreted relative to this directory.
+    /// </param>
+    /// <param name="placeholderArray">
+    /// Pointer to a mutable array of <paramref name="placeholderCount"/> entries. Windows writes
+    /// each entry's result and creation USN before returning.
+    /// </param>
+    /// <param name="placeholderCount">Number of entries in <paramref name="placeholderArray"/>.</param>
+    /// <param name="createFlags">Flags controlling failure behavior for the complete batch.</param>
+    /// <param name="entriesProcessed">
+    /// Optional pointer receiving the number of entries processed. Pass <see langword="null"/>
+    /// when the count is not required.
+    /// </param>
+    /// <returns>
+    /// The native batch-level <c>HRESULT</c> without translation. Inspect every processed entry's
+    /// <see cref="CfPlaceholderCreateInfo.Result"/> when the call permits partial success.
+    /// </returns>
+    /// <remarks>
+    /// The function retains no pointers. The array, relative names, and identity buffers must
+    /// remain valid only until it returns. Entry identities cannot exceed
+    /// <see cref="MaxFileIdentityLength"/> bytes.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfCreatePlaceholders))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfCreatePlaceholders(
+        char* baseDirectoryPath,
+        CfPlaceholderCreateInfo* placeholderArray,
+        uint placeholderCount,
+        CfCreateFlags createFlags,
+        uint* entriesProcessed);
+
     /// <summary>
     /// Connects a registered sync root to a provider callback table.
     /// </summary>
@@ -277,6 +315,35 @@ public static partial class CfApi
         "CA1401:P/Invokes should not be visible",
         Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
     public static partial int CfDisconnectSyncRoot(CfConnectionKey connectionKey);
+
+    /// <summary>Completes or advances a Cloud Files callback operation.</summary>
+    /// <param name="operationInfo">
+    /// Pointer to operation identity copied from the callback. Its type selects the active
+    /// branch in <paramref name="operationParameters"/>.
+    /// </param>
+    /// <param name="operationParameters">
+    /// Pointer to mutable operation parameters with a branch-specific
+    /// <see cref="CfOperationParameters.ParamSize"/>. Windows may update output fields.
+    /// </param>
+    /// <returns>
+    /// The native call-level <c>HRESULT</c> without translation. For completion operations, the
+    /// request outcome is carried separately by the branch's <see cref="NtStatus"/> value.
+    /// </returns>
+    /// <remarks>
+    /// Input buffers need remain valid until this call returns. A successful return means Windows
+    /// accepted this operation; it does not replace the terminal status supplied for the request.
+    /// Calls for separate requests may execute concurrently.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfExecute))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfExecute(
+        CfOperationInfo* operationInfo,
+        CfOperationParameters* operationParameters);
 
     /// <summary>Updates the activity or terminal status reported for a connected provider.</summary>
     /// <param name="connectionKey">Opaque key of the active provider connection.</param>

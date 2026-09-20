@@ -59,7 +59,16 @@ int main()
               << "  \"cfCallbackTypeNone\": " << CF_CALLBACK_TYPE_NONE << ",\n"
               << "  \"cfConnectFlagBlockSelfImplicitHydration\": " << CF_CONNECT_FLAG_BLOCK_SELF_IMPLICIT_HYDRATION << ",\n"
               << "  \"cfOperationInfoSize\": " << sizeof(CF_OPERATION_INFO) << ",\n"
-              << "  \"cfOperationParametersSize\": " << sizeof(CF_OPERATION_PARAMETERS) << "\n"
+              << "  \"cfOperationInfoTransferKeyOffset\": " << offsetof(CF_OPERATION_INFO, TransferKey) << ",\n"
+              << "  \"cfOperationInfoRequestKeyOffset\": " << offsetof(CF_OPERATION_INFO, RequestKey) << ",\n"
+              << "  \"cfOperationParametersSize\": " << sizeof(CF_OPERATION_PARAMETERS) << ",\n"
+              << "  \"cfOperationParametersUnionOffset\": " << offsetof(CF_OPERATION_PARAMETERS, TransferData) << ",\n"
+              << "  \"cfOperationTransferDataSize\": " << sizeof(((CF_OPERATION_PARAMETERS*)0)->TransferData) << ",\n"
+              << "  \"cfFsMetadataSize\": " << sizeof(CF_FS_METADATA) << ",\n"
+              << "  \"cfPlaceholderCreateInfoSize\": " << sizeof(CF_PLACEHOLDER_CREATE_INFO) << ",\n"
+              << "  \"cfPlaceholderCreateInfoMetadataOffset\": " << offsetof(CF_PLACEHOLDER_CREATE_INFO, FsMetadata) << ",\n"
+              << "  \"cfPlaceholderCreateInfoCreateUsnOffset\": " << offsetof(CF_PLACEHOLDER_CREATE_INFO, CreateUsn) << ",\n"
+              << "  \"cfPlaceholderCreateFlagAlwaysFull\": " << CF_PLACEHOLDER_CREATE_FLAG_ALWAYS_FULL << "\n"
               << "}\n";
 
     return 0;

@@ -17,9 +17,10 @@ The project is designed around two packages:
 
 ## Status
 
-CfSharp is under active development. Platform discovery and persistent sync-root registration,
-query, update, and unregistration are implemented. Provider callbacks, placeholder transfer,
-and the complete file-system facade are not yet ready. No production package has been released.
+CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, and
+the native provider callback, placeholder creation, and transfer primitives are implemented.
+The safe managed provider runtime and complete file-system facade are not yet ready. No
+production package has been released.
 
 ## Sync Root Lifecycle
 

@@ -65,7 +65,7 @@ public unsafe struct CfCallbackInfo
     public char* NormalizedPath;
 
     /// <summary>Opaque transfer key used to complete or manipulate the callback request.</summary>
-    public long TransferKey;
+    public CfTransferKey TransferKey;
 
     /// <summary>Relative priority hint from zero through <see cref="CfApi.MaxPriorityHint"/>.</summary>
     public byte PriorityHint;
@@ -77,5 +77,5 @@ public unsafe struct CfCallbackInfo
     public CfProcessInfo* ProcessInfo;
 
     /// <summary>Opaque request key used by request-specific operations.</summary>
-    public long RequestKey;
+    public CfRequestKey RequestKey;
 }

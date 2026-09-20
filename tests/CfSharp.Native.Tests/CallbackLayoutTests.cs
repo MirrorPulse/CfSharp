@@ -106,14 +106,20 @@ public sealed class CallbackLayoutTests
     }
 
     [Fact]
-    public void CallbackConstantsMatchWindowsSdk()
+    public unsafe void CallbackConstantsMatchWindowsSdk()
     {
+        CfCallbackRegistration terminator = CfCallbackRegistration.End;
+
         Assert.Equal(-1, (int)CfCallbackType.None);
         Assert.Equal(12, (int)CfCallbackType.NotifyRenameCompletion);
+        Assert.Equal(CfCallbackType.None, terminator.Type);
+        Assert.True(terminator.Callback is null);
         Assert.Equal(0x00000008u, (uint)CfConnectFlags.BlockSelfImplicitHydration);
         Assert.Equal(0x00000002u, (uint)CfCallbackFetchDataFlags.ExplicitHydration);
         Assert.Equal(0x00000002u, (uint)CfCallbackCancelFlags.IoAborted);
         Assert.Equal(15, CfApi.MaxPriorityHint);
+        Assert.Equal(-1, CfApi.EndOfFile);
+        Assert.Equal(0, CfApi.DefaultRequestKey);
     }
 
     private static void AssertLayout<T>(

@@ -74,9 +74,12 @@ public sealed class PlaceholderCreationTests
                 Assert.NotEqual(0, placeholder.CreateUsn);
             }
 
-            FileInfo placeholderFile = new(Path.Combine(rootPath, relativeName));
+            string placeholderPath = Path.Combine(rootPath, relativeName);
+            FileInfo placeholderFile = new(placeholderPath);
             Assert.True(placeholderFile.Exists);
             Assert.Equal(fileSize, placeholderFile.Length);
+
+            VerifyProtectedHandleAndTransferKey(placeholderPath);
 
             root.Unregister();
             registered = false;
@@ -99,6 +102,48 @@ public sealed class PlaceholderCreationTests
             {
                 Directory.Delete(rootPath, recursive: true);
             }
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static unsafe void VerifyProtectedHandleAndTransferKey(string placeholderPath)
+    {
+        nint protectedHandle = 0;
+        bool referenced = false;
+
+        fixed (char* placeholderPathPointer = placeholderPath)
+        {
+            int openResult = CfApi.CfOpenFileWithOplock(
+                placeholderPathPointer,
+                CfOpenFileFlags.Foreground,
+                out protectedHandle);
+            Assert.Equal(0, openResult);
+            Assert.NotEqual(0, protectedHandle);
+        }
+
+        try
+        {
+            referenced = CfApi.CfReferenceProtectedHandle(protectedHandle) != 0;
+            Assert.True(referenced);
+
+            nint win32Handle = CfApi.CfGetWin32HandleFromProtectedHandle(protectedHandle);
+            Assert.NotEqual(0, win32Handle);
+            Assert.NotEqual(-1, win32Handle);
+
+            CfTransferKey transferKey = default;
+            int keyResult = CfApi.CfGetTransferKey(win32Handle, &transferKey);
+            Assert.Equal(0, keyResult);
+            CfApi.CfReleaseTransferKey(win32Handle, &transferKey);
+            Assert.NotEqual(0, transferKey.Internal);
+        }
+        finally
+        {
+            if (referenced)
+            {
+                CfApi.CfReleaseProtectedHandle(protectedHandle);
+            }
+
+            CfApi.CfCloseHandle(protectedHandle);
         }
     }
 }

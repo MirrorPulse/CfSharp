@@ -77,6 +77,10 @@ public sealed class PlaceholderTransferLayoutTests
     {
         Assert.Equal(0x00000008u, (uint)CfPlaceholderCreateFlags.AlwaysFull);
         Assert.Equal(0x00000001u, (uint)CfCreateFlags.StopOnError);
+        Assert.Equal(0x00000001u, (uint)CfOpenFileFlags.Exclusive);
+        Assert.Equal(0x00000002u, (uint)CfOpenFileFlags.WriteAccess);
+        Assert.Equal(0x00000004u, (uint)CfOpenFileFlags.DeleteAccess);
+        Assert.Equal(0x00000008u, (uint)CfOpenFileFlags.Foreground);
         Assert.Equal(7, (int)CfOperationType.AckRename);
         Assert.Equal(0x00000002u, (uint)CfOperationTransferPlaceholdersFlags.DisableOnDemandPopulation);
         Assert.Equal(0, NtStatus.Success.Value);

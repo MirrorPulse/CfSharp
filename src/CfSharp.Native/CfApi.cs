@@ -22,6 +22,18 @@ namespace CfSharp.Native;
 /// </remarks>
 public static partial class CfApi
 {
+    /// <summary>
+    /// Sentinel length indicating that an operation extends from its starting offset to the
+    /// logical end of the file. Mirrors <c>CF_EOF</c>.
+    /// </summary>
+    public const long EndOfFile = -1;
+
+    /// <summary>
+    /// Default request-key value for operations that are not associated with a callback request.
+    /// Mirrors <c>CF_REQUEST_KEY_DEFAULT</c>.
+    /// </summary>
+    public const long DefaultRequestKey = 0;
+
     /// <summary>Maximum provider display-name length, excluding the terminating null.</summary>
     public const int MaxProviderNameLength = 255;
 
@@ -252,6 +264,118 @@ public static partial class CfApi
         CfCreateFlags createFlags,
         uint* entriesProcessed);
 
+    /// <summary>Opens a file or directory as an opaque Cloud Files protected handle.</summary>
+    /// <param name="filePath">
+    /// Pointer to a null-terminated, fully qualified UTF-16 path. The pointer need remain valid
+    /// only until this call returns.
+    /// </param>
+    /// <param name="flags">Access, sharing, and oplock behavior for the open.</param>
+    /// <param name="protectedHandle">
+    /// Receives an opaque protected handle. On success, the caller owns one reference and must
+    /// close it exactly once with <see cref="CfCloseHandle"/>. It must not be passed directly to
+    /// general Win32 APIs.
+    /// </param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Unless <see cref="CfOpenFileFlags.Foreground"/> is specified, Windows requests an oplock
+    /// and may invalidate the protected handle after draining active references when that oplock
+    /// breaks. The handle can represent either an ordinary item or a placeholder.
+    /// </para>
+    /// <para>
+    /// Call <see cref="CfReferenceProtectedHandle"/> before borrowing its Win32 handle and pair
+    /// every successful reference with <see cref="CfReleaseProtectedHandle"/>. Closing the
+    /// protected handle while another thread uses it requires caller synchronization.
+    /// </para>
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfOpenFileWithOplock))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native pointer contract.")]
+    public static unsafe partial int CfOpenFileWithOplock(
+        char* filePath,
+        CfOpenFileFlags flags,
+        out nint protectedHandle);
+
+    /// <summary>Acquires a temporary reference that prevents a protected handle from closing.</summary>
+    /// <param name="protectedHandle">Opaque handle returned by <see cref="CfOpenFileWithOplock"/>.</param>
+    /// <returns>A nonzero native <c>BOOLEAN</c> on success; otherwise zero.</returns>
+    /// <remarks>
+    /// Every successful call must be paired with <see cref="CfReleaseProtectedHandle"/>. Keep the
+    /// reference short-lived because it delays oplock-break acknowledgement and can block other
+    /// applications from opening the item.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReferenceProtectedHandle))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally preserves the one-byte BOOLEAN return value.")]
+    public static partial byte CfReferenceProtectedHandle(nint protectedHandle);
+
+    /// <summary>Gets the borrowed Win32 handle underlying a referenced protected handle.</summary>
+    /// <param name="protectedHandle">
+    /// Opaque handle with a currently held reference from <see cref="CfReferenceProtectedHandle"/>.
+    /// </param>
+    /// <returns>
+    /// The borrowed Win32 handle. The caller must not close it and must stop using it before
+    /// releasing the corresponding protected-handle reference.
+    /// </returns>
+    /// <remarks>
+    /// This function returns a raw handle rather than an <c>HRESULT</c>. Callers must treat an
+    /// invalid handle value as failure. Concurrent release or closure requires external
+    /// synchronization.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetWin32HandleFromProtectedHandle))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the borrowed native handle.")]
+    public static partial nint CfGetWin32HandleFromProtectedHandle(nint protectedHandle);
+
+    /// <summary>Releases one reference acquired with <see cref="CfReferenceProtectedHandle"/>.</summary>
+    /// <param name="protectedHandle">Opaque protected handle whose reference is released.</param>
+    /// <remarks>
+    /// The call has no return value. The protected handle remains owned by its original caller and
+    /// still requires <see cref="CfCloseHandle"/>. Do not use the borrowed Win32 handle after this
+    /// call.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReleaseProtectedHandle))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the native protected-handle lifetime.")]
+    public static partial void CfReleaseProtectedHandle(nint protectedHandle);
+
+    /// <summary>Closes a protected handle returned by <see cref="CfOpenFileWithOplock"/>.</summary>
+    /// <param name="fileHandle">
+    /// Opaque protected handle to close. This must not be an ordinary Win32 handle.
+    /// </param>
+    /// <remarks>
+    /// The call has no return value. The caller must ensure all references acquired through
+    /// <see cref="CfReferenceProtectedHandle"/> have first been released and must not use the
+    /// protected handle again after this call.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfCloseHandle))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the native protected-handle lifetime.")]
+    public static partial void CfCloseHandle(nint fileHandle);
+
     /// <summary>
     /// Connects a registered sync root to a provider callback table.
     /// </summary>
@@ -315,6 +439,51 @@ public static partial class CfApi
         "CA1401:P/Invokes should not be visible",
         Justification = "CfSharp.Native intentionally exposes the complete native key contract.")]
     public static partial int CfDisconnectSyncRoot(CfConnectionKey connectionKey);
+
+    /// <summary>Acquires a transfer key for provider-initiated operations on a placeholder.</summary>
+    /// <param name="fileHandle">
+    /// Open Win32 handle to a placeholder with read-data or write-DAC access. The caller retains
+    /// ownership and must keep it open while the returned key is used.
+    /// </param>
+    /// <param name="transferKey">Receives the opaque transfer key.</param>
+    /// <returns>
+    /// The native <c>HRESULT</c> without translation. A value of zero is <c>S_OK</c>;
+    /// negative values indicate failure.
+    /// </returns>
+    /// <remarks>
+    /// A successful acquisition must be paired with <see cref="CfReleaseTransferKey"/> using the
+    /// same open file handle and key. The key may be supplied to <see cref="CfExecute"/> to drive
+    /// proactive data transfer outside a fetch callback. Callers must synchronize handle closure
+    /// with key use.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetTransferKey))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial int CfGetTransferKey(
+        nint fileHandle,
+        CfTransferKey* transferKey);
+
+    /// <summary>Releases a transfer key obtained by <see cref="CfGetTransferKey"/>.</summary>
+    /// <param name="fileHandle">The same still-open Win32 handle used to acquire the key.</param>
+    /// <param name="transferKey">Pointer to the transfer key being released.</param>
+    /// <remarks>
+    /// The call has no return value and retains no memory. It does not close
+    /// <paramref name="fileHandle"/>. The caller must prevent concurrent handle closure.
+    /// </remarks>
+    [LibraryImport("CldApi.dll", EntryPoint = nameof(CfReleaseTransferKey))]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
+    [SupportedOSPlatform("windows10.0.16299")]
+    [SuppressMessage(
+        "Interoperability",
+        "CA1401:P/Invokes should not be visible",
+        Justification = "CfSharp.Native intentionally exposes the complete native handle contract.")]
+    public static unsafe partial void CfReleaseTransferKey(
+        nint fileHandle,
+        CfTransferKey* transferKey);
 
     /// <summary>Completes or advances a Cloud Files callback operation.</summary>
     /// <param name="operationInfo">

@@ -2,6 +2,7 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,5 +18,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CfSharp.Native\CfSharp.Native.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\eng\cfapi-coverage.json"
+          Link="cfapi-coverage.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

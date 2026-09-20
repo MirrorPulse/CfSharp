@@ -14,6 +14,16 @@ namespace CfSharp.Native;
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct CfCallbackRegistration
 {
+    /// <summary>
+    /// Gets the terminator entry required at the end of a callback-registration array.
+    /// Mirrors <c>CF_CALLBACK_REGISTRATION_END</c>.
+    /// </summary>
+    public static CfCallbackRegistration End => new()
+    {
+        Type = CfCallbackType.None,
+        Callback = null,
+    };
+
     /// <summary>Identifies the callback request handled by this entry.</summary>
     public CfCallbackType Type;
 

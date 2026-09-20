@@ -8,10 +8,13 @@ CfSharp is a Windows-only .NET library that exposes the complete Windows Cloud F
 
 - Preserve complete native API coverage. No native capability may become unreachable from managed code.
 - Make the high-level API the default user experience. Callers should not need to manage pointers, native unions, structure sizes, callback lifetimes, or raw `HRESULT` values.
-- Maintain a strict layered design: `CfSharp.Native` provides accurate native bindings, while `CfSharp` provides safe domain abstractions.
+- Maintain a strict dependency direction: `CfSharp.Native` provides accurate native bindings, `CfSharp` provides safe domain abstractions, and optional integration packages such as `CfSharp.Storage.Sqlite` depend on `CfSharp` without reversing either dependency.
 - Keep `CfSharp.Native` conventional and polished even though it primarily serves advanced users and the high-level package.
 - Prefer explicit lifecycle and ownership semantics over hidden global state.
 - Preserve native error details whenever errors are translated into managed exceptions or results.
+- Require callers to select durable state explicitly. The official SQLite implementation requires a caller-supplied path, while custom transactional stores remain fully replaceable.
+- Configure state through a factory. `CloudFileSystem` opens the store only after validating the sync root and assumes disposal ownership after a successful open.
+- Never place the SQLite state database inside a managed sync root or persist file content, authentication secrets, or provider-specific remote business data in the CfSharp state store.
 
 ## Language And Documentation
 

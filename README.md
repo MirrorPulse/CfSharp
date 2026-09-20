@@ -2,10 +2,14 @@
 
 CfSharp is a Windows-only .NET library for the Windows Cloud Files API (`cfapi.h` and `CldApi.dll`).
 
-The project is designed around two packages:
+The project currently contains two core packages:
 
 - `CfSharp.Native` provides complete, ABI-accurate native bindings.
 - `CfSharp` provides a safe, idiomatic file-system API for sync providers.
+
+An optional `CfSharp.Storage.Sqlite` package is planned as the official durable-state
+implementation. Applications will explicitly provide its database path or replace it with a
+custom transactional state store; the core library will never choose a hidden storage location.
 
 ## Goals
 
@@ -19,8 +23,9 @@ The project is designed around two packages:
 
 CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, and
 native callback, placeholder creation, and transfer primitives are implemented. A safe managed
-provider session can hydrate file content on demand. Namespace callbacks and the complete
-file-system facade are not yet ready. No production package has been released.
+provider session can hydrate file content on demand. Namespace callbacks, the complete
+file-system facade, and the SQLite state provider are not yet ready. No production package has
+been released.
 
 ## Sync Root Lifecycle
 

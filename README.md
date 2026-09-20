@@ -66,6 +66,28 @@ Registration is persistent and does not end when the process exits. `Unregister(
 explicit account-removal or uninstall operation: Windows traverses the tree and may delete
 placeholder content that is not locally complete. It must not be used as routine session cleanup.
 
+## Cloud File-System Lifecycle
+
+`CloudFileSystem` is the normal process-scoped facade. Building validates and freezes its
+configuration without acquiring resources. Starting opens the configured durable store, applies
+or verifies persistent registration, and connects the optional content provider:
+
+```csharp
+await using CloudFileSystem fileSystem = CloudFileSystem.CreateBuilder(localDirectory)
+    .WithStateStore(
+        new SqliteCloudStateStoreFactory(
+            @"C:\ProgramData\ExampleProvider\Accounts\account-42\cfsharp.db"))
+    .WithRegistration(registration)
+    .WithContentProvider(contentProvider)
+    .Build();
+
+await fileSystem.StartAsync(cancellationToken);
+```
+
+Disposal stops the provider session before closing durable state. It intentionally leaves the
+persistent sync-root registration installed. Use `CloudSyncRoot.Unregister()` only for explicit
+account removal or uninstall.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

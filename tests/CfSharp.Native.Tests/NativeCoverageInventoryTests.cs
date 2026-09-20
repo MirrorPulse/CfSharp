@@ -126,6 +126,8 @@ public sealed class NativeCoverageInventoryTests
             .GetProperty("header")
             .GetProperty("defaultMinimumWindowsVersion")
             .GetString()!;
+        int platformInfoResult = CfApi.CfGetPlatformInfo(out CfPlatformInfo platformInfo);
+        Assert.Equal(0, platformInfoResult);
         nint library = NativeLibrary.Load("CldApi.dll");
 
         try
@@ -137,7 +139,8 @@ public sealed class NativeCoverageInventoryTests
                     ? version.GetString()!
                     : defaultVersion;
 
-                if (IsCurrentWindowsAtLeast(minimumVersion))
+                if (IsCurrentWindowsAtLeast(minimumVersion) &&
+                    IsCapabilityAvailable(root, nativeName, platformInfo.IntegrationNumber))
                 {
                     Assert.True(NativeLibrary.TryGetExport(library, nativeName, out _), nativeName);
                 }
@@ -190,6 +193,23 @@ public sealed class NativeCoverageInventoryTests
             version.Major,
             version.Minor,
             version.Build);
+    }
+
+    private static bool IsCapabilityAvailable(
+        JsonElement root,
+        string nativeName,
+        uint currentIntegrationNumber)
+    {
+        foreach (JsonElement gate in root.GetProperty("capabilityGates").EnumerateArray())
+        {
+            if (gate.GetProperty("nativeName").GetString() == nativeName)
+            {
+                return currentIntegrationNumber >=
+                    gate.GetProperty("minimumIntegrationNumber").GetUInt32();
+            }
+        }
+
+        return true;
     }
 
     private static bool IsFunction(JsonElement entry) =>

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.Versioning;
 
 namespace CfSharp.Tests;
 
@@ -194,6 +195,7 @@ public sealed class CloudPlaceholderModelTests
     }
 
     [Fact]
+    [SupportedOSPlatform("windows10.0.16299")]
     public void BatchAndRecursiveResultsCopyInputAndPreserveFailures()
     {
         CloudFilePlaceholderSpec specification = CloudFilePlaceholderSpec
@@ -224,6 +226,18 @@ public sealed class CloudPlaceholderModelTests
         Assert.Throws<AggregateException>(batch.ThrowIfAnyFailed);
         Assert.Throws<NotSupportedException>(() =>
             ((IList<CloudPlaceholderBatchEntryResult>)batch.Entries).Add(batch.Entries[0]));
+
+        CloudPlaceholderBatchEntryResult matched = new(
+            specification,
+            @"C:\sync\report.pdf",
+            CloudItemOperationStatus.Succeeded,
+            CloudPlaceholderCreationProgress.ExistingPlaceholderMatched |
+                CloudPlaceholderCreationProgress.DurableStatePersisted,
+            createUsn: null,
+            new CloudFile(null!, @"C:\sync\report.pdf", "report.pdf"),
+            error: null);
+        Assert.True(matched.DurableStatePersisted);
+        Assert.Null(matched.CreateUsn);
 
         List<CloudRecursiveOperationEntryResult> recursiveEntries =
         [

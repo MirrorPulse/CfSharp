@@ -85,7 +85,7 @@ public sealed class CloudFile : CloudItem
 
 /// <summary>Represents an immutable path-bound directory reference.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class CloudDirectory : CloudItem
+public sealed partial class CloudDirectory : CloudItem
 {
     internal CloudDirectory(CloudFileSystem owner, string fullPath, string relativePath)
         : base(owner, fullPath, relativePath, CloudItemKind.Directory)

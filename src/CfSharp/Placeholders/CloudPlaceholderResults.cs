@@ -20,7 +20,7 @@ public enum CloudPlaceholderCreationProgress
     /// <summary>No file-system or durable-state change completed.</summary>
     None = 0,
 
-    /// <summary>Windows created or matched the requested placeholder namespace entry.</summary>
+    /// <summary>Windows created the requested placeholder namespace entry.</summary>
     PlaceholderCreated = 1 << 0,
 
     /// <summary>The placeholder identity mapping was committed to durable state.</summary>
@@ -31,6 +31,9 @@ public enum CloudPlaceholderCreationProgress
 
     /// <summary>The requested pin-state transition completed.</summary>
     PinStateApplied = 1 << 3,
+
+    /// <summary>An existing placeholder with the exact requested identity was reused.</summary>
+    ExistingPlaceholderMatched = 1 << 4,
 }
 
 /// <summary>Describes one immutable placeholder-creation entry outcome.</summary>
@@ -52,7 +55,8 @@ public sealed class CloudPlaceholderBatchEntryResult
             CloudPlaceholderCreationProgress.PlaceholderCreated |
             CloudPlaceholderCreationProgress.DurableStatePersisted |
             CloudPlaceholderCreationProgress.ContentHydrated |
-            CloudPlaceholderCreationProgress.PinStateApplied;
+            CloudPlaceholderCreationProgress.PinStateApplied |
+            CloudPlaceholderCreationProgress.ExistingPlaceholderMatched;
         if ((progress & ~allProgress) != 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -70,21 +74,42 @@ public sealed class CloudPlaceholderBatchEntryResult
 
         bool placeholderCreated = progress.HasFlag(
             CloudPlaceholderCreationProgress.PlaceholderCreated);
-        if (placeholderCreated != (createUsn is not null && item is not null))
+        bool existingPlaceholderMatched = progress.HasFlag(
+            CloudPlaceholderCreationProgress.ExistingPlaceholderMatched);
+        if (placeholderCreated && existingPlaceholderMatched)
         {
             throw new ArgumentException(
-                "Created entries must carry both a creation USN and item reference.",
+                "An entry cannot be both newly created and matched from existing state.",
                 nameof(progress));
         }
 
-        if (!placeholderCreated && progress is not CloudPlaceholderCreationProgress.None)
+        if (placeholderCreated != (createUsn is not null))
+        {
+            throw new ArgumentException(
+                "Exactly newly created entries must carry a creation USN.",
+                nameof(progress));
+        }
+
+        bool placeholderAvailable = placeholderCreated || existingPlaceholderMatched;
+        if (placeholderAvailable != (item is not null))
+        {
+            throw new ArgumentException(
+                "Created or matched entries must carry an item reference.",
+                nameof(progress));
+        }
+
+        CloudPlaceholderCreationProgress laterSteps = progress &
+            (CloudPlaceholderCreationProgress.DurableStatePersisted |
+             CloudPlaceholderCreationProgress.ContentHydrated |
+             CloudPlaceholderCreationProgress.PinStateApplied);
+        if (!placeholderAvailable && laterSteps is not CloudPlaceholderCreationProgress.None)
         {
             throw new ArgumentException(
                 "Later creation steps cannot complete before the placeholder exists.",
                 nameof(progress));
         }
 
-        if (status is CloudItemOperationStatus.Succeeded && !placeholderCreated)
+        if (status is CloudItemOperationStatus.Succeeded && !placeholderAvailable)
         {
             throw new ArgumentException(
                 "A successful entry must identify the created placeholder.",
@@ -141,14 +166,22 @@ public sealed class CloudPlaceholderBatchResult
 {
     private readonly IReadOnlyList<CloudPlaceholderBatchEntryResult> _entries;
 
-    internal CloudPlaceholderBatchResult(IEnumerable<CloudPlaceholderBatchEntryResult> entries)
+    internal CloudPlaceholderBatchResult(
+        IEnumerable<CloudPlaceholderBatchEntryResult> entries,
+        CloudFilesException? batchError = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         _entries = Array.AsReadOnly(entries.ToArray());
+        BatchError = batchError;
     }
 
     /// <summary>Gets results in the same order as the input specifications.</summary>
     public IReadOnlyList<CloudPlaceholderBatchEntryResult> Entries => _entries;
+
+    /// <summary>
+    /// Gets the batch-level Windows failure, independently of per-entry failures.
+    /// </summary>
+    public CloudFilesException? BatchError { get; }
 
     /// <summary>Gets the number of successful entries.</summary>
     public int SucceededCount => _entries.Count(static entry =>
@@ -163,21 +196,51 @@ public sealed class CloudPlaceholderBatchResult
         entry.Status is CloudItemOperationStatus.NotProcessed);
 
     /// <summary>Gets whether every requested entry was processed successfully.</summary>
-    public bool IsSuccessful => FailedCount == 0 && NotProcessedCount == 0;
+    public bool IsSuccessful =>
+        BatchError is null && FailedCount == 0 && NotProcessedCount == 0;
 
     /// <summary>Throws an aggregate containing every preserved entry failure.</summary>
-    /// <exception cref="AggregateException">At least one entry failed.</exception>
+    /// <exception cref="AggregateException">The batch or at least one entry failed.</exception>
     public void ThrowIfAnyFailed()
     {
-        CloudFilesException[] failures = _entries
+        IEnumerable<CloudFilesException> entryFailures = _entries
             .Where(static entry => entry.Error is not null)
-            .Select(static entry => entry.Error!)
-            .ToArray();
+            .Select(static entry => entry.Error!);
+        CloudFilesException[] failures = BatchError is null
+            ? entryFailures.ToArray()
+            : entryFailures.Prepend(BatchError).ToArray();
         if (failures.Length != 0)
         {
             throw new AggregateException("One or more placeholder entries failed.", failures);
         }
     }
+}
+
+/// <summary>
+/// Reports that Windows created or matched placeholders but their identity mappings could not be
+/// committed to the configured durable state store.
+/// </summary>
+/// <remarks>
+/// Windows file-system changes and a custom state store cannot share one physical transaction.
+/// <see cref="AppliedResult"/> is immutable and identifies the namespace work completed before the
+/// store failure. Callers should retain the failure for diagnostics and reconcile or retry the
+/// operation; identity-based retry matching prevents duplicate placeholder creation.
+/// </remarks>
+public sealed class CloudPlaceholderPersistenceException : Exception
+{
+    internal CloudPlaceholderPersistenceException(
+        CloudPlaceholderBatchResult appliedResult,
+        Exception innerException)
+        : base(
+            "Windows applied one or more placeholder entries, but their durable state could not be committed.",
+            innerException)
+    {
+        ArgumentNullException.ThrowIfNull(appliedResult);
+        AppliedResult = appliedResult;
+    }
+
+    /// <summary>Gets the ordered immutable result of work applied before persistence failed.</summary>
+    public CloudPlaceholderBatchResult AppliedResult { get; }
 }
 
 /// <summary>Describes one immutable result from explicit recursive execution.</summary>

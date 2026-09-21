@@ -144,6 +144,20 @@ the platform's 4 KiB maximum. Remote identifiers and revisions must never contai
 secrets. `CloudFileRange`, conversion options, explicit placeholder patches, and batch/recursive
 result values preserve validation and partial-failure information without exposing native unions.
 
+Create direct children in one validated batch. Results remain in input order and preserve native
+batch failures, per-entry failures, and completed post-creation steps independently:
+
+```csharp
+CloudPlaceholderBatchResult result = await fileSystem.Root.CreatePlaceholdersAsync(
+    [report, CloudDirectoryPlaceholderSpec.CreateBuilder("Archive", "archive-42").Build()]);
+
+result.ThrowIfAnyFailed();
+```
+
+Successful namespace entries are committed to the configured state store in one transaction.
+Retrying the same path and encoded identity is idempotent. An unrelated existing item remains a
+conflict unless its specification explicitly requests supersede.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

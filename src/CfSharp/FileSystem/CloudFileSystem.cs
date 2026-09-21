@@ -32,7 +32,7 @@ namespace CfSharp;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
+public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly CloudItemOperationCoordinator _operationCoordinator = new();

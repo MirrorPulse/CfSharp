@@ -37,7 +37,7 @@ public abstract class CloudPlaceholderSpec
     /// <summary>Gets explicit existing-item collision behavior.</summary>
     public CloudPlaceholderCollisionBehavior CollisionBehavior { get; }
 
-    private static string ValidateName(string name)
+    internal static string ValidateName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (name is "." or ".." ||
@@ -48,7 +48,7 @@ public abstract class CloudPlaceholderSpec
             IsReservedDeviceName(name))
         {
             throw new ArgumentException(
-                "A placeholder name must be one valid child path segment.",
+                "A cloud item name must be one valid child path segment.",
                 nameof(name));
         }
 

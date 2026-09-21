@@ -100,4 +100,15 @@ public sealed class CloudFilesException : Exception
 
         return new CloudFilesException(operation, path, hresult, message, nativeException);
     }
+
+    internal static CloudFilesException FromException(
+        string operation,
+        string path,
+        Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = $"Cloud Files operation '{operation}' for path '{path}' failed with " +
+            $"HRESULT 0x{unchecked((uint)exception.HResult):X8}: {exception.Message}";
+        return new CloudFilesException(operation, path, exception.HResult, message, exception);
+    }
 }

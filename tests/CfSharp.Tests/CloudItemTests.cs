@@ -266,6 +266,49 @@ public sealed class CloudItemTests
             .Build());
     }
 
+    [Fact]
+    public async Task NamespaceOperationsRejectInvalidTargetsBeforeMutation()
+    {
+        using TestDirectory firstRoot = new();
+        using TestDirectory secondRoot = new();
+        await using CloudFileSystem first = await StartAsync(
+            firstRoot.Path,
+            new InspectionStore());
+        await using CloudFileSystem second = await StartAsync(
+            secondRoot.Path,
+            new InspectionStore());
+        CloudFile file = first.GetFile("missing.bin");
+        CloudDirectory directory = first.GetDirectory("missing-directory");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => file
+            .MoveToAsync(first.Root, @"nested\invalid.bin")
+            .AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() => file
+            .MoveToAsync(second.Root, "other.bin")
+            .AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(() => directory
+            .MoveToAsync(
+                first.Root,
+                "renamed",
+                new CloudMoveOptions(replaceExisting: true))
+            .AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first.Root
+            .MoveToAsync(first.Root, "renamed-root")
+            .AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first.Root
+            .DeleteAsync()
+            .AsTask());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first.Root
+            .DeleteTreeAsync()
+            .AsTask());
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => first.Root
+            .SetPinStateRecursivelyAsync((CloudPinTarget)int.MaxValue)
+            .AsTask());
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => first.Root
+            .SetAvailabilityRecursivelyAsync((CloudAvailabilityTarget)int.MaxValue)
+            .AsTask());
+    }
+
     private static async Task<IReadOnlyList<CloudItem>> CollectAsync(
         IAsyncEnumerable<CloudItem> items)
     {

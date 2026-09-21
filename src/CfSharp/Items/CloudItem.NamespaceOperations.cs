@@ -1,0 +1,63 @@
+namespace CfSharp;
+
+public abstract partial class CloudItem
+{
+    /// <summary>Moves or renames this item within the owning sync root.</summary>
+    /// <param name="destination">Existing destination directory owned by the same file system.</param>
+    /// <param name="name">One valid destination child name.</param>
+    /// <param name="options">Collision behavior, or null for no replacement.</param>
+    /// <param name="cancellationToken">
+    /// Token observed before the synchronous file-system move and during durable-state work.
+    /// </param>
+    /// <returns>
+    /// A new immutable reference and snapshot at the destination. This reference remains bound to
+    /// the old path and is not mutated.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// The destination belongs to another file system, the name is invalid, or replacement was
+    /// requested for a directory.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The sync root was selected, the destination lies below the source directory, or durable
+    /// state already identifies an unrelated destination item.
+    /// </exception>
+    /// <exception cref="CloudFilesException">Windows rejects the namespace move.</exception>
+    /// <exception cref="CloudItemCoordinationException">
+    /// Windows moved the item but durable subtree paths could not be committed.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// Cancellation was observed before the synchronous move or during pre-move state access.
+    /// </exception>
+    public ValueTask<CloudItemMoveResult> MoveToAsync(
+        CloudDirectory destination,
+        string name,
+        CloudMoveOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return Owner.MoveAsync(
+            this,
+            destination,
+            name,
+            options ?? CloudMoveOptions.Default,
+            cancellationToken);
+    }
+
+    /// <summary>Deletes this file or empty directory without following a file-system link.</summary>
+    /// <param name="cancellationToken">
+    /// Token observed before the synchronous deletion and during durable-state work.
+    /// </param>
+    /// <returns>A missing-item snapshot and whether durable identity became a tombstone.</returns>
+    /// <exception cref="InvalidOperationException">The sync root was selected.</exception>
+    /// <exception cref="FileNotFoundException">The item no longer exists.</exception>
+    /// <exception cref="CloudFilesException">Windows rejects the deletion.</exception>
+    /// <exception cref="CloudItemCoordinationException">
+    /// Windows deleted the item but its tombstone could not be committed.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// Cancellation was observed before the synchronous deletion.
+    /// </exception>
+    public ValueTask<CloudItemDeleteResult> DeleteAsync(
+        CancellationToken cancellationToken = default) =>
+        Owner.DeleteAsync(this, cancellationToken);
+}

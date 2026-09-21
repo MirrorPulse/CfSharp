@@ -57,6 +57,8 @@ public abstract partial class CloudItem
 
     private protected CloudFileSystem Owner => _owner;
 
+    internal bool IsOwnedBy(CloudFileSystem owner) => ReferenceEquals(_owner, owner);
+
     /// <summary>Reads fresh local and durable state without retaining a native handle.</summary>
     /// <param name="cancellationToken">Token that cancels state-store access.</param>
     /// <returns>A new immutable snapshot. Missing items are represented explicitly.</returns>

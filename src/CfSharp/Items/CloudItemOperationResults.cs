@@ -117,6 +117,82 @@ public sealed class CloudAvailabilityTransitionException : Exception
     public CloudAvailabilityChangeResult PartialResult { get; }
 }
 
+/// <summary>Describes a completed same-root move or rename.</summary>
+/// <remarks>
+/// The result owns no native resources. Its item reference and snapshot are immutable and safe for
+/// concurrent reads; subsequent file-system changes require a new inspection.
+/// </remarks>
+public sealed class CloudItemMoveResult
+{
+    internal CloudItemMoveResult(
+        string sourcePath,
+        string destinationPath,
+        CloudItem item,
+        CloudItemSnapshot snapshot,
+        int durableStateEntriesUpdated)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentOutOfRangeException.ThrowIfNegative(durableStateEntriesUpdated);
+        SourcePath = sourcePath;
+        DestinationPath = destinationPath;
+        Item = item;
+        Snapshot = snapshot;
+        DurableStateEntriesUpdated = durableStateEntriesUpdated;
+    }
+
+    /// <summary>Gets the normalized absolute source path used by the operation.</summary>
+    public string SourcePath { get; }
+
+    /// <summary>Gets the normalized absolute destination path.</summary>
+    public string DestinationPath { get; }
+
+    /// <summary>Gets the new immutable path-bound item reference.</summary>
+    public CloudItem Item { get; }
+
+    /// <summary>Gets a fresh handle-free snapshot captured at the destination.</summary>
+    public CloudItemSnapshot Snapshot { get; }
+
+    /// <summary>Gets the number of durable item paths updated in the committed transaction.</summary>
+    public int DurableStateEntriesUpdated { get; }
+}
+
+/// <summary>Describes a completed file or empty-directory deletion.</summary>
+/// <remarks>
+/// The result owns no native resources. Its snapshot is immutable and safe for concurrent reads;
+/// a durable tombstone contains coordination metadata only, never deleted file content.
+/// </remarks>
+public sealed class CloudItemDeleteResult
+{
+    internal CloudItemDeleteResult(
+        string path,
+        CloudItemKind kind,
+        bool durableStateUpdated,
+        CloudItemSnapshot snapshot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        Kind = CloudPlaceholderConversionOptions.RequireDefined(kind, nameof(kind));
+        ArgumentNullException.ThrowIfNull(snapshot);
+        Path = path;
+        DurableStateUpdated = durableStateUpdated;
+        Snapshot = snapshot;
+    }
+
+    /// <summary>Gets the normalized absolute path that was deleted.</summary>
+    public string Path { get; }
+
+    /// <summary>Gets whether the deleted item was a file or directory.</summary>
+    public CloudItemKind Kind { get; }
+
+    /// <summary>Gets whether an existing durable identity was committed as a tombstone.</summary>
+    public bool DurableStateUpdated { get; }
+
+    /// <summary>Gets a fresh missing-item snapshot, including its tombstone when present.</summary>
+    public CloudItemSnapshot Snapshot { get; }
+}
+
 /// <summary>
 /// Reports that a file-system mutation completed but its corresponding durable-state change did
 /// not commit.
@@ -133,14 +209,27 @@ public sealed class CloudItemCoordinationException : Exception
         string path,
         long? operationUsn,
         Exception innerException)
+        : this(operation, path, destinationPath: null, operationUsn, innerException)
+    {
+    }
+
+    internal CloudItemCoordinationException(
+        string operation,
+        string path,
+        string? destinationPath,
+        long? operationUsn,
+        Exception innerException)
         : base(
-            $"File-system operation '{operation}' completed for '{path}', but its durable state could not be committed.",
+            destinationPath is null
+                ? $"File-system operation '{operation}' completed for '{path}', but its durable state could not be committed."
+                : $"File-system operation '{operation}' moved '{path}' to '{destinationPath}', but its durable state could not be committed.",
             innerException)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operation);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Operation = operation;
         Path = path;
+        DestinationPath = destinationPath;
         OperationUsn = operationUsn;
     }
 
@@ -149,6 +238,9 @@ public sealed class CloudItemCoordinationException : Exception
 
     /// <summary>Gets the normalized absolute path changed by Windows.</summary>
     public string Path { get; }
+
+    /// <summary>Gets the move destination path, or null for a non-move operation.</summary>
+    public string? DestinationPath { get; }
 
     /// <summary>Gets the final USN returned by Windows, when available.</summary>
     public long? OperationUsn { get; }

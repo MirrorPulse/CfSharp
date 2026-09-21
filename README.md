@@ -195,6 +195,41 @@ and `AlwaysAvailable` pins and hydrates it. If the second native step fails,
 steps, and a fresh post-failure snapshot. Range results are normalized, ordered, immutable, and
 kept separate for on-disk, provider-validated, and locally modified content.
 
+Moves keep path references immutable and update durable directory descendants together after the
+file-system move succeeds:
+
+```csharp
+CloudItemMoveResult moved = await file.MoveToAsync(
+    archiveDirectory,
+    "report-final.pdf",
+    cancellationToken: cancellationToken);
+
+CloudFile movedFile = (CloudFile)moved.Item;
+CloudItemDeleteResult deleted = await movedFile.DeleteAsync(cancellationToken);
+```
+
+The original `file` reference remains bound to its old path. Deleting a tracked item commits a
+durable tombstone so a later local-change pipeline can publish the deletion. Because Windows and
+the configured state store cannot share one physical transaction, a store failure after a move or
+delete becomes `CloudItemCoordinationException`; its paths identify the namespace work that already
+completed.
+
+Recursive operations are always explicit and operate only on the currently materialized local
+tree. They return deterministic per-entry success, failure, or not-processed results:
+
+```csharp
+CloudRecursiveOperationResult result = await folder.DeleteTreeAsync(
+    new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: false),
+    cancellationToken);
+
+result.ThrowIfAnyFailed();
+```
+
+Recursive state changes visit parents before children; recursive deletion visits children before
+parents. Symbolic links and junctions are never traversed. State operations omit link entries,
+while deletion removes only the link itself and leaves its target untouched. These methods do not
+enumerate remote children or substitute for provider `FETCH_PLACEHOLDERS` callbacks.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

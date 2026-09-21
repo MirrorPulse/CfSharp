@@ -2,6 +2,18 @@ namespace CfSharp;
 
 public sealed partial class CloudDirectory
 {
+    /// <summary>Marks this placeholder directory as partial or fully populated.</summary>
+    /// <param name="state">Requested population state.</param>
+    /// <param name="cancellationToken">Token observed before the synchronous native update.</param>
+    /// <returns>The completed placeholder mutation.</returns>
+    /// <exception cref="CloudFilesException">Windows rejects the population-state update.</exception>
+    public ValueTask<CloudPlaceholderMutationResult> SetPopulationStateAsync(
+        CloudDirectoryPopulationState state,
+        CancellationToken cancellationToken = default) =>
+        UpdatePlaceholderAsync(
+            CloudPlaceholderPatch.CreateBuilder().WithPopulationState(state).Build(),
+            cancellationToken);
+
     /// <summary>Creates one child placeholder and returns its completed entry result.</summary>
     /// <param name="placeholder">Immutable file or directory placeholder specification.</param>
     /// <param name="cancellationToken">

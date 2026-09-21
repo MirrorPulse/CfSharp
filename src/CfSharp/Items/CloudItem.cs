@@ -12,7 +12,7 @@ namespace CfSharp;
 /// started.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
-public abstract class CloudItem
+public abstract partial class CloudItem
 {
     private readonly CloudFileSystem _owner;
 
@@ -75,7 +75,7 @@ public abstract class CloudItem
 
 /// <summary>Represents an immutable path-bound file reference.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class CloudFile : CloudItem
+public sealed partial class CloudFile : CloudItem
 {
     internal CloudFile(CloudFileSystem owner, string fullPath, string relativePath)
         : base(owner, fullPath, relativePath, CloudItemKind.File)

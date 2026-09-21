@@ -22,6 +22,7 @@ public sealed class CloudPlaceholderPatch
         DehydrateWholeFile = builder.DehydrateWholeFile;
         _dehydrateRanges = Array.AsReadOnly(builder.DehydrateRanges.ToArray());
         RemoveExtrinsicProperties = builder.RemoveExtrinsicProperties;
+        RequireInSync = builder.RequireInSync;
         ExpectedUsn = builder.ExpectedUsn;
     }
 
@@ -55,6 +56,9 @@ public sealed class CloudPlaceholderPatch
     /// <summary>Gets whether all extrinsic placeholder properties are removed.</summary>
     public bool RemoveExtrinsicProperties { get; }
 
+    /// <summary>Gets whether the update fails unless the placeholder is currently in sync.</summary>
+    public bool RequireInSync { get; }
+
     /// <summary>Gets the expected current USN, or null for no condition.</summary>
     public long? ExpectedUsn { get; }
 
@@ -83,6 +87,8 @@ public sealed class CloudPlaceholderPatch
         internal List<CloudFileRange> DehydrateRanges { get; } = [];
 
         internal bool RemoveExtrinsicProperties { get; private set; }
+
+        internal bool RequireInSync { get; private set; }
 
         internal long? ExpectedUsn { get; private set; }
 
@@ -167,6 +173,13 @@ public sealed class CloudPlaceholderPatch
             return this;
         }
 
+        /// <summary>Requires the placeholder to be in sync when the atomic update begins.</summary>
+        public Builder WithInSyncVerification()
+        {
+            RequireInSync = true;
+            return this;
+        }
+
         /// <summary>Makes the update conditional on a positive current USN.</summary>
         public Builder WithExpectedUsn(long expectedUsn)
         {
@@ -201,7 +214,8 @@ public sealed class CloudPlaceholderPatch
                 ContentMode is not null ||
                 DehydrateWholeFile ||
                 DehydrateRanges.Count != 0 ||
-                RemoveExtrinsicProperties;
+                RemoveExtrinsicProperties ||
+                RequireInSync;
             if (!hasChange)
             {
                 throw new InvalidOperationException("A placeholder patch must request at least one change.");

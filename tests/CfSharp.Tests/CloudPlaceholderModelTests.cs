@@ -172,6 +172,7 @@ public sealed class CloudPlaceholderModelTests
             .WithContentMode(CloudFileContentMode.AllowPartial)
             .WithDehydratedRanges(ranges)
             .WithExtrinsicPropertyRemoval()
+            .WithInSyncVerification()
             .WithExpectedUsn(42)
             .Build();
         ranges.Add(new CloudFileRange(4096, 4096));
@@ -181,6 +182,7 @@ public sealed class CloudPlaceholderModelTests
         Assert.Single(patch.DehydrateRanges);
         Assert.Equal(42, patch.ExpectedUsn);
         Assert.True(patch.RemoveExtrinsicProperties);
+        Assert.True(patch.RequireInSync);
         Assert.Throws<InvalidOperationException>(() => CloudPlaceholderPatch.CreateBuilder().Build());
         Assert.Throws<InvalidOperationException>(() => CloudPlaceholderPatch
             .CreateBuilder()

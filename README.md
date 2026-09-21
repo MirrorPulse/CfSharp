@@ -158,6 +158,20 @@ Successful namespace entries are committed to the configured state store in one 
 Retrying the same path and encoded identity is idempotent. An unrelated existing item remains a
 conflict unless its specification explicitly requests supersede.
 
+Existing items expose explicit conversion, patch, and reversion operations. Patches distinguish
+unchanged, replacement, and removal semantics and can condition an update on the observed USN:
+
+```csharp
+CloudPlaceholderMutationResult updated = await file.UpdatePlaceholderAsync(
+    CloudPlaceholderPatch.CreateBuilder()
+        .WithIdentity(newIdentity)
+        .WithInSyncVerification()
+        .WithExpectedUsn(observedUsn)
+        .Build());
+```
+
+Mutation results contain a fresh post-operation snapshot and never retain native handles.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

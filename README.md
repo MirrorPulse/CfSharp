@@ -124,6 +124,26 @@ Local enumeration never calls the remote content provider or changes the namespa
 opt-in, streams results breadth-first, and never follows directory reparse points. Existing links
 that resolve outside the sync root are rejected rather than traversed.
 
+## Placeholder Operation Models
+
+Placeholder operations use immutable, kind-specific specifications rather than native structures
+or flags. A specification owns a stable CfSharp item identity, provider remote identity and
+revision, metadata, collision behavior, and requested initial state:
+
+```csharp
+CloudFilePlaceholderSpec report = CloudFilePlaceholderSpec
+    .CreateBuilder("report.pdf", "remote-report-42", length: 128_000)
+    .WithRemoteRevision("etag-7")
+    .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly)
+    .Build();
+```
+
+`CloudPlaceholderIdentity` uses a deterministic, versioned envelope suitable for the native
+Cloud Files identity blob. It can be encoded or decoded without native resources and is limited to
+the platform's 4 KiB maximum. Remote identifiers and revisions must never contain credentials or
+secrets. `CloudFileRange`, conversion options, explicit placeholder patches, and batch/recursive
+result values preserve validation and partial-failure information without exposing native unions.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

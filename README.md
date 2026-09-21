@@ -189,8 +189,9 @@ IReadOnlyList<CloudFileRange> onDisk = await file.GetRangesAsync(
     cancellationToken);
 ```
 
-`OnlineOnly` unpins and dehydrates the complete file, `LocallyAvailable` unpins and hydrates it,
-and `AlwaysAvailable` pins and hydrates it. If the second native step fails,
+`OnlineOnly` unpins and then dehydrates the complete file. `LocallyAvailable` and
+`AlwaysAvailable` hydrate first, then apply their final unpinned or pinned intent so a pin-triggered
+provider request cannot race the explicit hydration. If either native step fails,
 `CloudAvailabilityTransitionException` preserves the original `CloudFilesException`, completed
 steps, and a fresh post-failure snapshot. Range results are normalized, ordered, immutable, and
 kept separate for on-disk, provider-validated, and locally modified content.

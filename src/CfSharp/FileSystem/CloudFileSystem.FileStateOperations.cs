@@ -106,27 +106,33 @@ public sealed partial class CloudFileSystem
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            CloudFileStatePlatform.SetPinState(
-                file.FullPath,
-                target is CloudAvailabilityTarget.AlwaysAvailable
-                    ? CloudPinTarget.Pinned
-                    : CloudPinTarget.Unpinned);
-            pinStateApplied = true;
-
-            cancellationToken.ThrowIfCancellationRequested();
             if (target is CloudAvailabilityTarget.OnlineOnly)
             {
+                CloudFileStatePlatform.SetPinState(file.FullPath, CloudPinTarget.Unpinned);
+                pinStateApplied = true;
+
+                cancellationToken.ThrowIfCancellationRequested();
                 CloudFileStatePlatform.Dehydrate(
                     file.FullPath,
                     CloudFileRange.WholeFile,
                     CloudDehydrationOptions.Foreground);
+                contentStateApplied = true;
             }
             else
             {
+                // Applying the final pin intent after synchronous hydration avoids racing work
+                // that Windows or another sync-engine component may start for a newly pinned file.
                 CloudFileStatePlatform.Hydrate(file.FullPath, CloudFileRange.WholeFile);
-            }
+                contentStateApplied = true;
 
-            contentStateApplied = true;
+                cancellationToken.ThrowIfCancellationRequested();
+                CloudFileStatePlatform.SetPinState(
+                    file.FullPath,
+                    target is CloudAvailabilityTarget.AlwaysAvailable
+                        ? CloudPinTarget.Pinned
+                        : CloudPinTarget.Unpinned);
+                pinStateApplied = true;
+            }
         }
         catch (CloudFilesException failure)
         {

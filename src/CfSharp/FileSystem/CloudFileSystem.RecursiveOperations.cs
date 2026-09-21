@@ -165,19 +165,21 @@ public sealed partial class CloudFileSystem
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        CloudFileStatePlatform.SetPinState(
-            entry.FullPath,
-            target is CloudAvailabilityTarget.AlwaysAvailable
-                ? CloudPinTarget.Pinned
-                : CloudPinTarget.Unpinned);
         if (entry.Kind is CloudItemKind.Directory)
         {
+            CloudFileStatePlatform.SetPinState(
+                entry.FullPath,
+                target is CloudAvailabilityTarget.AlwaysAvailable
+                    ? CloudPinTarget.Pinned
+                    : CloudPinTarget.Unpinned);
             return;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
         if (target is CloudAvailabilityTarget.OnlineOnly)
         {
+            CloudFileStatePlatform.SetPinState(entry.FullPath, CloudPinTarget.Unpinned);
+
+            cancellationToken.ThrowIfCancellationRequested();
             CloudFileStatePlatform.Dehydrate(
                 entry.FullPath,
                 CloudFileRange.WholeFile,
@@ -185,7 +187,16 @@ public sealed partial class CloudFileSystem
         }
         else
         {
+            // Hydration must finish before finalizing pin intent. A preceding pin transition may
+            // otherwise race provider work that Windows starts for the same placeholder.
             CloudFileStatePlatform.Hydrate(entry.FullPath, CloudFileRange.WholeFile);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            CloudFileStatePlatform.SetPinState(
+                entry.FullPath,
+                target is CloudAvailabilityTarget.AlwaysAvailable
+                    ? CloudPinTarget.Pinned
+                    : CloudPinTarget.Unpinned);
         }
     }
 

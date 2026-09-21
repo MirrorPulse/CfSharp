@@ -134,7 +134,7 @@ public sealed class CloudItemNamespaceOperationTests
             Directory.CreateSymbolicLink(linkPath, outsidePath);
             CloudRecursiveOperationResult pinned = await movedDirectory
                 .SetPinStateRecursivelyAsync(CloudPinTarget.Pinned);
-            Assert.True(pinned.IsSuccessful);
+            pinned.ThrowIfAnyFailed();
             Assert.Equal(4, pinned.Entries.Count);
             Assert.DoesNotContain(
                 pinned.Entries,
@@ -142,15 +142,15 @@ public sealed class CloudItemNamespaceOperationTests
 
             CloudRecursiveOperationResult local = await movedDirectory
                 .SetAvailabilityRecursivelyAsync(CloudAvailabilityTarget.LocallyAvailable);
-            Assert.True(local.IsSuccessful);
+            local.ThrowIfAnyFailed();
             Assert.Equal(4, local.Entries.Count);
             Assert.Equal(content, await File.ReadAllBytesAsync(movedDeepFile.FullPath));
             CloudRecursiveOperationResult online = await movedDirectory
                 .SetAvailabilityRecursivelyAsync(CloudAvailabilityTarget.OnlineOnly);
-            Assert.True(online.IsSuccessful);
+            online.ThrowIfAnyFailed();
 
             CloudRecursiveOperationResult treeDeleted = await movedDirectory.DeleteTreeAsync();
-            Assert.True(treeDeleted.IsSuccessful);
+            treeDeleted.ThrowIfAnyFailed();
             Assert.Equal(5, treeDeleted.Entries.Count);
             Assert.Equal(movedDirectory.FullPath, treeDeleted.Entries[^1].Path);
             Assert.Contains(

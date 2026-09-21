@@ -87,9 +87,11 @@ CloudFile report = fileSystem.GetFile(@"Documents\report.pdf");
 CloudItemSnapshot current = await report.InspectAsync(cancellationToken);
 ```
 
-Disposal stops the provider session before closing durable state. It intentionally leaves the
-persistent sync-root registration installed. Use `CloudSyncRoot.Unregister()` only for explicit
-account removal or uninstall.
+Item work admitted by a started facade holds an explicit operation lease. Conflicting path scopes
+are serialized while non-overlapping paths may proceed concurrently. Disposal rejects new work,
+waits for admitted operations to finish, stops the provider session, and then closes durable state.
+It intentionally leaves the persistent sync-root registration installed. Use
+`CloudSyncRoot.Unregister()` only for explicit account removal or uninstall.
 
 `CloudFile`, `CloudDirectory`, and the root directory are immutable path references. They keep no
 native handle and cache no mutable attributes. Every `InspectAsync()` call returns a fresh,

@@ -23,22 +23,27 @@ namespace CfSharp;
 /// <para>
 /// Public lifecycle members are safe for concurrent calls. Startup and disposal are serialized.
 /// A failed startup can be retried only when all partially acquired resources were released. Item
-/// objects returned by later APIs are immutable and do not inherit this object's synchronization
-/// primitive. If resource disposal fails, successfully released resources remain released and the
-/// instance stays in <see cref="CloudFileSystemLifecycleState.Stopping"/> so disposal can be
-/// retried for the remaining resources.
+/// operations admitted while started hold explicit resource-lifetime leases. Conflicting path
+/// scopes are serialized while non-overlapping paths may proceed concurrently. Disposal rejects
+/// new work, drains admitted work, and then releases resources. If resource disposal fails,
+/// successfully released resources remain released and the instance stays in
+/// <see cref="CloudFileSystemLifecycleState.Stopping"/> so disposal can be retried for the
+/// remaining resources.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly CloudItemOperationCoordinator _operationCoordinator = new();
     private readonly ICloudStateStoreFactory _stateStoreFactory;
     private readonly SyncRootRegistrationOptions? _registration;
     private readonly ICloudFileContentProvider? _contentProvider;
     private readonly ICloudFileSystemRuntime _runtime;
     private ICloudStateStore? _stateStore;
     private ICloudFileSystemRuntimeSession? _runtimeSession;
+    private TaskCompletionSource? _operationsDrained;
+    private int _activeOperations;
     private int _state = (int)CloudFileSystemLifecycleState.Created;
 
     private CloudFileSystem(
@@ -262,7 +267,10 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Releases process resources without unregistering the persistent sync root.</summary>
-    /// <returns>An operation that completes after the provider session and state store terminate.</returns>
+    /// <returns>
+    /// An operation that completes after admitted item operations drain and the provider session
+    /// and state store terminate.
+    /// </returns>
     /// <exception cref="AggregateException">
     /// More than one owned resource failed during disposal. Every resource is still attempted.
     /// Failed resources remain owned so disposal can be retried.
@@ -278,6 +286,25 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
             }
 
             Volatile.Write(ref _state, (int)CloudFileSystemLifecycleState.Stopping);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+
+        Task operationsDrained = Volatile.Read(ref _activeOperations) == 0
+            ? Task.CompletedTask
+            : Volatile.Read(ref _operationsDrained)?.Task ?? Task.CompletedTask;
+        await operationsDrained.ConfigureAwait(false);
+
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (LifecycleState is CloudFileSystemLifecycleState.Disposed)
+            {
+                return;
+            }
+
             IReadOnlyList<Exception> failures = await DisposeOwnedResourcesAsync()
                 .ConfigureAwait(false);
             if (failures.Count == 0)
@@ -308,53 +335,94 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         CloudItem item,
         CancellationToken cancellationToken)
     {
+        using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+            [CloudItemOperationScope.Exact(item.FullPath)],
+            cancellationToken).ConfigureAwait(false);
+        return await InspectCoreAsync(item, operation.StateStore, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask<CloudFileSystemOperationLease> AcquireOperationAsync(
+        IEnumerable<CloudItemOperationScope> scopes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scopes);
+        ICloudStateStore stateStore;
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureStarted();
-            LocalCloudItemInspection local = CloudItemInspector.Inspect(item.FullPath, item.Kind);
-            ICloudStateStore stateStore = _stateStore ??
+            stateStore = _stateStore ??
                 throw new InvalidOperationException("The cloud file system has no open state store.");
-            await using ICloudStateTransaction transaction = await stateStore
-                .BeginTransactionAsync(cancellationToken)
-                .ConfigureAwait(false);
-            CloudItemState? durableState = await transaction.Items
-                .GetByRelativePathAsync(item.RelativePath, cancellationToken)
-                .ConfigureAwait(false);
-            if (durableState is not null && durableState.Kind != item.Kind)
+            if (Volatile.Read(ref _activeOperations) == 0)
             {
-                throw new InvalidOperationException(
-                    $"Durable state identifies '{item.RelativePath}' as a " +
-                    $"{durableState.Kind.ToString().ToLowerInvariant()}, not a " +
-                    $"{item.Kind.ToString().ToLowerInvariant()}.");
+                Volatile.Write(
+                    ref _operationsDrained,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
             }
 
-            return new CloudItemSnapshot(
-                item.Kind,
-                local.Exists,
-                local.Attributes,
-                local.Length,
-                local.CreationTime,
-                local.LastWriteTime,
-                local.LastAccessTime,
-                local.PlaceholderState,
-                local.ContentAvailability,
-                local.PinState,
-                local.SynchronizationState,
-                local.LocalFileId,
-                local.SyncRootFileId,
-                local.OnDiskDataSize,
-                local.ValidatedDataSize,
-                local.ModifiedDataSize,
-                local.PropertyDataSize,
-                local.PlaceholderIdentity,
-                durableState,
-                DateTimeOffset.UtcNow);
+            Interlocked.Increment(ref _activeOperations);
         }
         finally
         {
             _lifecycleGate.Release();
         }
+
+        try
+        {
+            CloudItemOperationCoordinator.CloudItemOperationPathLease pathLease =
+                await _operationCoordinator.AcquireAsync(scopes, cancellationToken)
+                    .ConfigureAwait(false);
+            return new CloudFileSystemOperationLease(this, stateStore, pathLease);
+        }
+        catch
+        {
+            ReleaseOperation();
+            throw;
+        }
+    }
+
+    internal static async ValueTask<CloudItemSnapshot> InspectCoreAsync(
+        CloudItem item,
+        ICloudStateStore stateStore,
+        CancellationToken cancellationToken)
+    {
+        LocalCloudItemInspection local = CloudItemInspector.Inspect(item.FullPath, item.Kind);
+        await using ICloudStateTransaction transaction = await stateStore
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        CloudItemState? durableState = await transaction.Items
+            .GetByRelativePathAsync(item.RelativePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (durableState is not null && durableState.Kind != item.Kind)
+        {
+            throw new InvalidOperationException(
+                $"Durable state identifies '{item.RelativePath}' as a " +
+                $"{durableState.Kind.ToString().ToLowerInvariant()}, not a " +
+                $"{item.Kind.ToString().ToLowerInvariant()}.");
+        }
+
+        return new CloudItemSnapshot(
+            item.Kind,
+            local.Exists,
+            local.Attributes,
+            local.Length,
+            local.CreationTime,
+            local.LastWriteTime,
+            local.LastAccessTime,
+            local.PlaceholderState,
+            local.ContentAvailability,
+            local.PinState,
+            local.SynchronizationState,
+            local.LocalFileId,
+            local.SyncRootFileId,
+            local.OnDiskDataSize,
+            local.ValidatedDataSize,
+            local.ModifiedDataSize,
+            local.PropertyDataSize,
+            local.PlaceholderIdentity,
+            durableState,
+            DateTimeOffset.UtcNow);
     }
 
     private void EnsureStarted()
@@ -366,6 +434,20 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         if (state is not CloudFileSystemLifecycleState.Started)
         {
             throw new InvalidOperationException("The cloud file system has not been started.");
+        }
+    }
+
+    private void ReleaseOperation()
+    {
+        int remaining = Interlocked.Decrement(ref _activeOperations);
+        if (remaining < 0)
+        {
+            throw new InvalidOperationException("Cloud file-system operation accounting underflowed.");
+        }
+
+        if (remaining == 0)
+        {
+            Volatile.Read(ref _operationsDrained)?.TrySetResult();
         }
     }
 
@@ -399,6 +481,36 @@ public sealed class CloudFileSystem : IDisposable, IAsyncDisposable
         }
 
         return failures ?? [];
+    }
+
+    internal sealed class CloudFileSystemOperationLease : IDisposable
+    {
+        private CloudFileSystem? _owner;
+        private CloudItemOperationCoordinator.CloudItemOperationPathLease? _pathLease;
+
+        internal CloudFileSystemOperationLease(
+            CloudFileSystem owner,
+            ICloudStateStore stateStore,
+            CloudItemOperationCoordinator.CloudItemOperationPathLease pathLease)
+        {
+            _owner = owner;
+            StateStore = stateStore;
+            _pathLease = pathLease;
+        }
+
+        internal ICloudStateStore StateStore { get; }
+
+        public void Dispose()
+        {
+            CloudFileSystem? owner = Interlocked.Exchange(ref _owner, null);
+            if (owner is null)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _pathLease, null)?.Dispose();
+            owner.ReleaseOperation();
+        }
     }
 
     /// <summary>Builds immutable lifecycle configuration for one cloud file system.</summary>

@@ -243,6 +243,50 @@ public sealed class CloudFileSystemTests
         Assert.Equal(fileSystem.SyncRootPath, runtime.SyncRootPath);
     }
 
+    [Fact]
+    public async Task DisposalDrainsAdmittedOperationsBeforeReleasingResources()
+    {
+        using TestDirectory root = new();
+        RecordingStore store = new();
+        RecordingRuntime runtime = new();
+        CloudFileSystem fileSystem = CloudFileSystem
+            .CreateBuilder(root.Path, runtime)
+            .WithStateStore(new RecordingStoreFactory(store))
+            .Build();
+        await fileSystem.StartAsync();
+        CloudFileSystem.CloudFileSystemOperationLease operation =
+            await fileSystem.AcquireOperationAsync(
+                [CloudItemOperationScope.Subtree(root.Path)]);
+
+        Task disposal = fileSystem.DisposeAsync().AsTask();
+        await WaitForStateAsync(fileSystem, CloudFileSystemLifecycleState.Stopping);
+
+        Assert.False(disposal.IsCompleted);
+        Assert.Equal(0, runtime.Session.DisposeCalls);
+        Assert.Equal(0, store.DisposeCalls);
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await fileSystem.AcquireOperationAsync(
+                [CloudItemOperationScope.Exact(Path.Combine(root.Path, "new.bin"))]));
+
+        operation.Dispose();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(CloudFileSystemLifecycleState.Disposed, fileSystem.LifecycleState);
+        Assert.Equal(1, runtime.Session.DisposeCalls);
+        Assert.Equal(1, store.DisposeCalls);
+    }
+
+    private static async Task WaitForStateAsync(
+        CloudFileSystem fileSystem,
+        CloudFileSystemLifecycleState expected)
+    {
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
+        while (fileSystem.LifecycleState != expected)
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
     private sealed class TestDirectory : IDisposable
     {
         private int _disposed;

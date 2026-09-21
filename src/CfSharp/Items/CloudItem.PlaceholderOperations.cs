@@ -2,6 +2,32 @@ namespace CfSharp;
 
 public abstract partial class CloudItem
 {
+    /// <summary>Sets this placeholder's explicit pin intent without changing synchronization state.</summary>
+    /// <param name="target">Pin, unpin, exclude, clear, or inherit intent.</param>
+    /// <param name="cancellationToken">Token observed before the synchronous native call.</param>
+    /// <returns>A fresh snapshot after the state change.</returns>
+    /// <exception cref="CloudFilesException">Windows rejects the requested pin state.</exception>
+    public ValueTask<CloudStateChangeResult> SetPinStateAsync(
+        CloudPinTarget target,
+        CancellationToken cancellationToken = default) =>
+        Owner.SetPinStateAsync(this, target, cancellationToken);
+
+    /// <summary>Sets synchronization state, optionally conditioned on the current USN.</summary>
+    /// <param name="inSync">Whether local state agrees with provider state.</param>
+    /// <param name="options">Optional positive expected USN, or null for no condition.</param>
+    /// <param name="cancellationToken">Token observed before the synchronous native call.</param>
+    /// <returns>The Windows-returned USN and a fresh snapshot.</returns>
+    /// <exception cref="CloudFilesException">Windows rejects the state or USN condition.</exception>
+    public ValueTask<CloudStateChangeResult> SetInSyncAsync(
+        bool inSync,
+        CloudInSyncChangeOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        Owner.SetInSyncAsync(
+            this,
+            inSync,
+            options ?? new CloudInSyncChangeOptions(),
+            cancellationToken);
+
     /// <summary>Converts this existing ordinary item into a Cloud Files placeholder.</summary>
     /// <param name="identity">Stable CfSharp and provider identity stored with the item.</param>
     /// <param name="options">Conversion behavior, or null for content-preserving defaults.</param>

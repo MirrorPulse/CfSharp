@@ -172,6 +172,29 @@ CloudPlaceholderMutationResult updated = await file.UpdatePlaceholderAsync(
 
 Mutation results contain a fresh post-operation snapshot and never retain native handles.
 
+Pin intent, synchronization state, and physical content remain independently controllable. The
+three availability targets are convenience transitions with explicit partial-failure reporting:
+
+```csharp
+CloudAvailabilityChangeResult local = await file.SetAvailabilityAsync(
+    CloudAvailabilityTarget.LocallyAvailable,
+    cancellationToken);
+
+await file.SetInSyncAsync(inSync: true, cancellationToken: cancellationToken);
+await file.DehydrateAsync(new CloudFileRange(0, 64 * 1024), cancellationToken: cancellationToken);
+
+IReadOnlyList<CloudFileRange> onDisk = await file.GetRangesAsync(
+    CloudPlaceholderRangeKind.OnDisk,
+    CloudFileRange.WholeFile,
+    cancellationToken);
+```
+
+`OnlineOnly` unpins and dehydrates the complete file, `LocallyAvailable` unpins and hydrates it,
+and `AlwaysAvailable` pins and hydrates it. If the second native step fails,
+`CloudAvailabilityTransitionException` preserves the original `CloudFilesException`, completed
+steps, and a fresh post-failure snapshot. Range results are normalized, ordered, immutable, and
+kept separate for on-disk, provider-validated, and locally modified content.
+
 ## Sample Provider
 
 The sample mirrors files from a local content directory into a registered sync root as

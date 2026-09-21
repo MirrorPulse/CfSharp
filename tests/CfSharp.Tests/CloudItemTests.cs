@@ -390,6 +390,11 @@ public sealed class CloudItemTests
             return ValueTask.FromResult(item);
         }
 
+        public ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
+            string relativePath,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public ValueTask UpsertAsync(
             CloudItemState item,
             CancellationToken cancellationToken = default) =>

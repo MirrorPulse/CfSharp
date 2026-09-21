@@ -444,6 +444,11 @@ public sealed class CloudPlaceholderBatchTests
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<CloudItemState?>(null);
 
+        public ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
+            string relativePath,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyList<CloudItemState>>([]);
+
         public ValueTask UpsertAsync(
             CloudItemState item,
             CancellationToken cancellationToken = default) =>

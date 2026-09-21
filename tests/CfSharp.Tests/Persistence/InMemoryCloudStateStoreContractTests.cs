@@ -109,6 +109,34 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
             return ValueTask.FromResult(item);
         }
 
+        public ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
+            string relativePath,
+            CancellationToken cancellationToken = default)
+        {
+            CheckActive(cancellationToken);
+            ArgumentNullException.ThrowIfNull(relativePath);
+            string primaryPrefix = relativePath.Length == 0
+                ? string.Empty
+                : relativePath + Path.DirectorySeparatorChar;
+            string alternatePrefix = relativePath.Length == 0
+                ? string.Empty
+                : relativePath + Path.AltDirectorySeparatorChar;
+            IReadOnlyList<CloudItemState> items = _state.Items.Values
+                .Where(item =>
+                    relativePath.Length == 0 ||
+                    string.Equals(
+                        item.RelativePath,
+                        relativePath,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    item.RelativePath.StartsWith(primaryPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    item.RelativePath.StartsWith(alternatePrefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.RelativePath.Length)
+                .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.ItemId)
+                .ToArray();
+            return ValueTask.FromResult(items);
+        }
+
         public ValueTask UpsertAsync(
             CloudItemState item,
             CancellationToken cancellationToken = default)

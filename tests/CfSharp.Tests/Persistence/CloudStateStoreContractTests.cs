@@ -41,6 +41,50 @@ public abstract class CloudStateStoreContractTests
     }
 
     [Fact]
+    public async Task ItemSubtreeQueryHonorsPathBoundariesAndOrdering()
+    {
+        ICloudStateStoreFactory factory = CreateFactory();
+        await using ICloudStateStore store = await factory.OpenAsync(CreateContext());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        CloudItemState[] items =
+        [
+            CreateItem("remote-report", "Documents/report.txt", CloudItemKind.File, now),
+            CreateItem("remote-other", "Documents2/other.txt", CloudItemKind.File, now),
+            CreateItem("remote-root", string.Empty, CloudItemKind.Directory, now),
+            CreateItem("remote-subdirectory", "Documents/Sub", CloudItemKind.Directory, now),
+            CreateItem("remote-subfile", "Documents/Sub/data.bin", CloudItemKind.File, now),
+            CreateItem("remote-documents", "Documents", CloudItemKind.Directory, now),
+        ];
+
+        await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
+        {
+            foreach (CloudItemState item in items)
+            {
+                await write.Items.UpsertAsync(item);
+            }
+
+            await write.CommitAsync();
+        }
+
+        await using ICloudStateTransaction read = await store.BeginTransactionAsync();
+        IReadOnlyList<CloudItemState> subtree = await read.Items.ListSubtreeAsync("DOCUMENTS");
+        IReadOnlyList<CloudItemState> all = await read.Items.ListSubtreeAsync(string.Empty);
+
+        Assert.Equal(
+            ["Documents", "Documents/Sub", "Documents/report.txt", "Documents/Sub/data.bin"],
+            subtree.Select(static item => item.RelativePath));
+        Assert.Equal(string.Empty, all[0].RelativePath);
+        Assert.Equal(items.Length, all.Count);
+        Assert.DoesNotContain(
+            subtree,
+            static item => string.Equals(
+                item.RelativePath,
+                "Documents2/other.txt",
+                StringComparison.OrdinalIgnoreCase));
+        await read.RollbackAsync();
+    }
+
+    [Fact]
     public async Task DisposalAndExplicitRollbackDiscardWrites()
     {
         ICloudStateStoreFactory factory = CreateFactory();
@@ -272,6 +316,21 @@ public abstract class CloudStateStoreContractTests
 
     protected virtual CloudStateStoreContext CreateContext() =>
         new(Path.Combine(Path.GetTempPath(), "CfSharp-contract", Guid.NewGuid().ToString("N")));
+
+    private static CloudItemState CreateItem(
+        string remoteId,
+        string relativePath,
+        CloudItemKind kind,
+        DateTimeOffset updatedAt) =>
+        new(
+            Guid.NewGuid(),
+            remoteId,
+            relativePath,
+            kind,
+            remoteRevision: null,
+            localFileId: null,
+            isTombstone: false,
+            updatedAt);
 
     private static void AssertItem(CloudItemState expected, CloudItemState? actual)
     {

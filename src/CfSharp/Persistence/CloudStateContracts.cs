@@ -120,6 +120,19 @@ public interface ICloudItemStateRepository
         string relativePath,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists an item and its separator-delimited descendants in deterministic order.</summary>
+    /// <param name="relativePath">
+    /// Canonical relative subtree path, or an empty string to list the complete sync-root state.
+    /// </param>
+    /// <param name="cancellationToken">Token that cancels the transactional read.</param>
+    /// <returns>
+    /// A caller-owned snapshot ordered by path depth and then ordinal case-insensitive path.
+    /// Matching is ordinal case-insensitive and observes directory-segment boundaries.
+    /// </returns>
+    ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
+        string relativePath,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Inserts a new item or replaces the record with the same item identifier.</summary>
     ValueTask UpsertAsync(
         CloudItemState item,

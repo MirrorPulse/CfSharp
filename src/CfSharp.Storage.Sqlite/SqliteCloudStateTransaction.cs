@@ -232,6 +232,51 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 cancellationToken);
         }
 
+        public async ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
+            string relativePath,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(relativePath);
+            return await _owner.ExecuteAsync(
+                async token =>
+                {
+                    string condition = relativePath.Length == 0
+                        ? string.Empty
+                        : """
+                            WHERE relative_path = $path COLLATE NOCASE
+                              OR substr(relative_path, 1, length($primary_prefix)) = $primary_prefix COLLATE NOCASE
+                              OR substr(relative_path, 1, length($alternate_prefix)) = $alternate_prefix COLLATE NOCASE
+                           """;
+                    await using SqliteCommand command = _owner.CreateCommand(
+                        SelectColumns + condition +
+                        " ORDER BY length(relative_path), relative_path COLLATE NOCASE, item_id;",
+                        token);
+                    if (relativePath.Length != 0)
+                    {
+                        command.Parameters.AddWithValue("$path", relativePath);
+                        command.Parameters.AddWithValue(
+                            "$primary_prefix",
+                            relativePath + Path.DirectorySeparatorChar);
+                        command.Parameters.AddWithValue(
+                            "$alternate_prefix",
+                            relativePath + Path.AltDirectorySeparatorChar);
+                    }
+
+                    await using SqliteDataReader reader = await command
+                        .ExecuteReaderAsync(token)
+                        .ConfigureAwait(false);
+                    List<CloudItemState> items = [];
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        items.Add(ReadItem(reader));
+                    }
+
+                    return (IReadOnlyList<CloudItemState>)items;
+                },
+                "The SQLite item subtree could not be listed.",
+                cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask UpsertAsync(
             CloudItemState item,
             CancellationToken cancellationToken = default)

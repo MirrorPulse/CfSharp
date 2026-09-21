@@ -2,6 +2,21 @@ namespace CfSharp;
 
 public sealed partial class CloudFileSystem
 {
+    private const int CloudFileUnsuccessfulHResult = unchecked((int)0x80070185);
+
+    // CfSetPinState starts provider work asynchronously.  A subsequent explicit hydrate can
+    // therefore briefly observe ERROR_CLOUD_FILE_UNSUCCESSFUL while the platform is completing
+    // the earlier pin transition.  Keep this retry narrow and bounded: provider failures and
+    // all other HRESULTs remain visible to callers without an implicit retry policy.
+    private static readonly TimeSpan[] HydrationRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(10),
+        TimeSpan.FromMilliseconds(25),
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+    ];
+
     internal async ValueTask<CloudStateChangeResult> SetPinStateAsync(
         CloudItem item,
         CloudPinTarget target,
@@ -122,7 +137,10 @@ public sealed partial class CloudFileSystem
             {
                 // Applying the final pin intent after synchronous hydration avoids racing work
                 // that Windows or another sync-engine component may start for a newly pinned file.
-                CloudFileStatePlatform.Hydrate(file.FullPath, CloudFileRange.WholeFile);
+                await HydrateWithTransientRetryAsync(
+                    file.FullPath,
+                    CloudFileRange.WholeFile,
+                    cancellationToken).ConfigureAwait(false);
                 contentStateApplied = true;
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -160,5 +178,28 @@ public sealed partial class CloudFileSystem
             pinStateApplied,
             contentStateApplied,
             snapshot);
+    }
+
+    private static async ValueTask HydrateWithTransientRetryAsync(
+        string path,
+        CloudFileRange range,
+        CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                CloudFileStatePlatform.Hydrate(path, range);
+                return;
+            }
+            catch (CloudFilesException exception)
+                when (exception.HResult == CloudFileUnsuccessfulHResult &&
+                      attempt < HydrationRetryDelays.Length)
+            {
+                await Task.Delay(HydrationRetryDelays[attempt], cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
     }
 }

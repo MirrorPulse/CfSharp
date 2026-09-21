@@ -191,7 +191,9 @@ IReadOnlyList<CloudFileRange> onDisk = await file.GetRangesAsync(
 
 `OnlineOnly` unpins and then dehydrates the complete file. `LocallyAvailable` and
 `AlwaysAvailable` hydrate first, then apply their final unpinned or pinned intent so a pin-triggered
-provider request cannot race the explicit hydration. If either native step fails,
+provider request cannot race the explicit hydration. Windows may still be completing an earlier
+asynchronous pin notification; in that narrow case CfSharp uses a bounded, cancellation-aware
+retry for `ERROR_CLOUD_FILE_UNSUCCESSFUL`. Other native failures are not retried. If either native step fails,
 `CloudAvailabilityTransitionException` preserves the original `CloudFilesException`, completed
 steps, and a fresh post-failure snapshot. Range results are normalized, ordered, immutable, and
 kept separate for on-disk, provider-validated, and locally modified content.

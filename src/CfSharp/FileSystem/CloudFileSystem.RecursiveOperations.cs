@@ -17,10 +17,14 @@ public sealed partial class CloudFileSystem
             directory,
             childrenFirst: false,
             options.IncludeRoot);
-        return ApplyRecursiveNativeOperation(
+        return await ApplyRecursiveNativeOperation(
             entries.Where(static entry => !entry.IsLink).ToArray(),
             options.StopOnFirstFailure,
-            entry => CloudFileStatePlatform.SetPinState(entry.FullPath, target),
+            (entry, _) =>
+            {
+                CloudFileStatePlatform.SetPinState(entry.FullPath, target);
+                return ValueTask.CompletedTask;
+            },
             cancellationToken);
     }
 
@@ -39,10 +43,10 @@ public sealed partial class CloudFileSystem
             directory,
             childrenFirst: false,
             options.IncludeRoot);
-        return ApplyRecursiveNativeOperation(
+        return await ApplyRecursiveNativeOperation(
             entries.Where(static entry => !entry.IsLink).ToArray(),
             options.StopOnFirstFailure,
-            entry => ApplyAvailability(entry, target, cancellationToken),
+            (entry, token) => ApplyAvailabilityAsync(entry, target, token),
             cancellationToken);
     }
 
@@ -118,10 +122,10 @@ public sealed partial class CloudFileSystem
         return new CloudRecursiveOperationResult(results);
     }
 
-    private static CloudRecursiveOperationResult ApplyRecursiveNativeOperation(
+    private static async ValueTask<CloudRecursiveOperationResult> ApplyRecursiveNativeOperation(
         IReadOnlyList<RecursiveItemEntry> entries,
         bool stopOnFirstFailure,
-        Action<RecursiveItemEntry> operation,
+        Func<RecursiveItemEntry, CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken)
     {
         List<CloudRecursiveOperationEntryResult> results = new(entries.Count);
@@ -140,7 +144,7 @@ public sealed partial class CloudFileSystem
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                operation(entry);
+                await operation(entry, cancellationToken).ConfigureAwait(false);
                 results.Add(CreateRecursiveResult(
                     entry,
                     CloudItemOperationStatus.Succeeded,
@@ -159,7 +163,7 @@ public sealed partial class CloudFileSystem
         return new CloudRecursiveOperationResult(results);
     }
 
-    private static void ApplyAvailability(
+    private static async ValueTask ApplyAvailabilityAsync(
         RecursiveItemEntry entry,
         CloudAvailabilityTarget target,
         CancellationToken cancellationToken)
@@ -189,7 +193,10 @@ public sealed partial class CloudFileSystem
         {
             // Hydration must finish before finalizing pin intent. A preceding pin transition may
             // otherwise race provider work that Windows starts for the same placeholder.
-            CloudFileStatePlatform.Hydrate(entry.FullPath, CloudFileRange.WholeFile);
+            await HydrateWithTransientRetryAsync(
+                entry.FullPath,
+                CloudFileRange.WholeFile,
+                cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
             CloudFileStatePlatform.SetPinState(

@@ -38,11 +38,11 @@ The state database stores synchronization coordination metadata, never file cont
 
 ## Status
 
-CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, and
-native callback, placeholder creation, and transfer primitives are implemented. A safe managed
-provider session can hydrate file content on demand. The transactional state contracts and the
-official SQLite provider are implemented. Namespace callbacks and the complete file-system
-facade are not yet ready. No production package has been released.
+CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, native
+callback, placeholder creation, transfer primitives, the managed demand provider, and the local
+change feed are implemented. The transactional state contracts and official SQLite provider are
+implemented. Remote change application and the complete product sample remain future phases. No
+production package has been released.
 
 ## Sync Root Lifecycle
 
@@ -216,6 +216,37 @@ durable tombstone so a later local-change pipeline can publish the deletion. Bec
 the configured state store cannot share one physical transaction, a store failure after a move or
 delete becomes `CloudItemCoordinationException`; its paths identify the namespace work that already
 completed.
+
+## Local Change Feed
+
+After startup, an application may create one explicit local-change feed for the sync root:
+
+```csharp
+CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+await feed.StartAsync(cancellationToken);
+
+CloudLocalChangeBatch batch = await feed.ReadBatchAsync(cancellationToken);
+if (batch.RequiresFullRescan)
+{
+    await ReconcileEntireSyncRootAsync(fileSystem, cancellationToken);
+    await feed.AcknowledgeFullRescanAsync(cancellationToken);
+}
+else
+{
+    await UploadLocalChangesAsync(batch.Changes, cancellationToken);
+    await feed.AcknowledgeAsync(
+        batch.Changes.Select(change => change.OperationId),
+        cancellationToken);
+}
+```
+
+The feed uses the Windows `ReadDirectoryChangesW`-backed watcher, copies notifications into a
+bounded managed queue, normalizes paths relative to the sync root, pairs renames, and commits
+the ordered operation journal and watcher checkpoint in one state-store transaction. Provider
+writes can be protected with `SuppressProviderEchoAsync`; hydration, pinning, and availability
+transitions are not upload operations by themselves. A buffer overflow or watcher error is
+explicitly reported as `RequiresFullRescan`. Applications must perform periodic full
+reconciliation and must not treat the notification stream as a lossless replacement for it.
 
 Recursive operations are always explicit and operate only on the currently materialized local
 tree. They return deterministic per-entry success, failure, or not-processed results:

@@ -47,7 +47,7 @@ public sealed record CloudProviderSessionOptions
     public bool RequireProcessInfo { get; init; }
 
     /// <summary>Blocks implicit hydration initiated by the provider process.</summary>
-    public bool BlockSelfImplicitHydration { get; init; } = true;
+    public bool BlockSelfImplicitHydration { get; init; }
 
     internal void Validate()
     {

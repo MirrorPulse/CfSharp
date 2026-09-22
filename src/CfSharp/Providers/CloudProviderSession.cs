@@ -12,7 +12,8 @@ namespace CfSharp;
 /// <remarks>
 /// <para>
 /// A session owns its native callback table, callback context, cancellation registry, and
-/// connection key. Create it with <see cref="Connect"/> and dispose it deterministically before
+/// connection key. Create it with <see cref="Connect(CloudSyncRoot, ICloudFileContentProvider)"/>
+/// and dispose it deterministically before
 /// unregistering the sync root. One session may serve concurrent Windows requests.
 /// </para>
 /// <para>
@@ -25,24 +26,25 @@ namespace CfSharp;
 public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 {
     private const int CallbackRegistrationCount = 3;
-    private const int TransferBufferSize = 64 * 1024;
-    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(30);
 
     private readonly ICloudFileContentProvider _contentProvider;
+    private readonly CloudProviderSessionOptions _options;
     private readonly object _lifecycleGate = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
-    private readonly ConcurrentDictionary<long, Task> _tasks = new();
+    private CloudProviderDispatcher? _dispatcher;
     private unsafe CfCallbackRegistration* _callbackTable;
     private GCHandle _callbackContext;
     private CfConnectionKey _connectionKey;
-    private long _nextTaskId;
     private int _stopping;
     private int _disposed;
 
-    private CloudProviderSession(ICloudFileContentProvider contentProvider)
+    private CloudProviderSession(
+        ICloudFileContentProvider contentProvider,
+        CloudProviderSessionOptions options)
     {
         _contentProvider = contentProvider;
+        _options = options;
     }
 
     /// <summary>Connects a content provider to a persistently registered sync root.</summary>
@@ -55,11 +57,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     public static CloudProviderSession Connect(
         CloudSyncRoot syncRoot,
         ICloudFileContentProvider contentProvider)
+        => Connect(syncRoot, contentProvider, CloudProviderSessionOptions.Default);
+
+    /// <summary>Connects a content provider with an explicit bounded runtime configuration.</summary>
+    /// <param name="syncRoot">Registered root that receives hydration callbacks.</param>
+    /// <param name="contentProvider">Thread-safe source of complete logical file streams.</param>
+    /// <param name="options">Immutable queue, concurrency, transfer, and shutdown limits.</param>
+    /// <returns>An owning session that must be disposed before the root is unregistered.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An option is outside its supported bound.</exception>
+    public static CloudProviderSession Connect(
+        CloudSyncRoot syncRoot,
+        ICloudFileContentProvider contentProvider,
+        CloudProviderSessionOptions options)
     {
         ArgumentNullException.ThrowIfNull(syncRoot);
         ArgumentNullException.ThrowIfNull(contentProvider);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
 
-        CloudProviderSession session = new(contentProvider);
+        CloudProviderSession session = new(contentProvider, options);
         session.ConnectCore(syncRoot.Path);
         return session;
     }
@@ -92,7 +109,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             return;
         }
 
-        Task[] tasks;
         lock (_lifecycleGate)
         {
             Volatile.Write(ref _stopping, 1);
@@ -101,26 +117,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             {
                 request.Cancel();
             }
-
-            tasks = _tasks.Values.ToArray();
         }
 
         try
         {
-            if (tasks.Length > 0)
+            if (_dispatcher is not null)
             {
-                try
-                {
-                    await Task.WhenAll(tasks).WaitAsync(ShutdownTimeout).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    // Disconnection below is the final boundary for a handler that ignored cancellation.
-                }
-                catch (Exception)
-                {
-                    // Request failures are already translated into native terminal statuses.
-                }
+                await _dispatcher.DisposeAsync(_options.ShutdownTimeout).ConfigureAwait(false);
             }
         }
         finally
@@ -135,6 +138,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private unsafe void ConnectCore(string path)
     {
+        _dispatcher = new CloudProviderDispatcher(_options);
         _callbackTable = (CfCallbackRegistration*)NativeMemory.Alloc(
             (nuint)CallbackRegistrationCount,
             (nuint)sizeof(CfCallbackRegistration));
@@ -168,7 +172,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 pathPointer,
                 _callbackTable,
                 (void*)GCHandle.ToIntPtr(_callbackContext),
-                CfConnectFlags.None,
+                CreateConnectFlags(_options),
                 out _connectionKey);
         }
 
@@ -177,6 +181,27 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ReleaseNativeState();
             ThrowIfFailed("CloudProviderSession.Connect", result);
         }
+    }
+
+    private static CfConnectFlags CreateConnectFlags(CloudProviderSessionOptions options)
+    {
+        CfConnectFlags flags = CfConnectFlags.None;
+        if (options.RequireFullFilePath)
+        {
+            flags |= CfConnectFlags.RequireFullFilePath;
+        }
+
+        if (options.RequireProcessInfo)
+        {
+            flags |= CfConnectFlags.RequireProcessInfo;
+        }
+
+        if (options.BlockSelfImplicitHydration)
+        {
+            flags |= CfConnectFlags.BlockSelfImplicitHydration;
+        }
+
+        return flags;
     }
 
     private unsafe void DispatchFetch(
@@ -207,30 +232,31 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             cancellation);
 
         long requestKey = callbackInfo->RequestKey.Internal;
-        long taskId;
-        Task task;
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
             {
-                SendFailure(activeRequest, NtStatus.CloudFileRequestAborted);
-                cancellation.Dispose();
+                CompleteRequest(activeRequest, NtStatus.CloudFileRequestAborted);
                 return;
             }
 
             if (!_requests.TryAdd(requestKey, activeRequest))
             {
-                SendFailure(activeRequest, NtStatus.CloudFileUnsuccessful);
-                cancellation.Dispose();
+                CompleteRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
             }
 
-            taskId = Interlocked.Increment(ref _nextTaskId);
-            task = Task.Run(() => ProcessRequestAsync(activeRequest));
-            _tasks[taskId] = task;
+            CloudProviderWorkItem workItem = new(
+                CloudProviderRequestKind.FetchData,
+                cancellation,
+                _ => new ValueTask(ProcessRequestAsync(activeRequest)),
+                () => CompleteRequest(activeRequest, NtStatus.CloudFileRequestAborted),
+                _ => CompleteRequest(activeRequest, NtStatus.CloudFileUnsuccessful));
+            if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
+            {
+                CompleteRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+            }
         }
-
-        _ = ObserveRequestAsync(taskId, requestKey, activeRequest, task);
     }
 
     private async Task ProcessRequestAsync(ActiveRequest activeRequest)
@@ -257,21 +283,21 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 source.Seek(activeRequest.Request.Offset, SeekOrigin.Begin);
             }
 
-            long availableLength = Math.Max(
-                0,
-                activeRequest.Request.FileSize - activeRequest.Request.Offset);
-            long remaining = Math.Min(activeRequest.Request.Length, availableLength);
-            if (remaining <= 0)
+            if (activeRequest.Request.Offset < 0 ||
+                activeRequest.Request.Length <= 0 ||
+                activeRequest.Request.Offset > activeRequest.Request.FileSize ||
+                activeRequest.Request.Length > activeRequest.Request.FileSize - activeRequest.Request.Offset)
             {
-                throw new EndOfStreamException("The requested range contains no transferable bytes.");
+                throw new InvalidDataException("The requested range exceeds the logical file size.");
             }
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(
-                checked((int)Math.Min(TransferBufferSize, remaining)));
+                Math.Min(_options.TransferChunkSize, checked((int)activeRequest.Request.Length)));
             try
             {
                 long offset = activeRequest.Request.Offset;
-                while (remaining > 0)
+                long remaining = activeRequest.Request.Length;
+                while (remaining != 0)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     int requested = checked((int)Math.Min(buffer.Length, remaining));
@@ -298,6 +324,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         catch (Exception)
         {
             SendFailure(activeRequest, NtStatus.CloudFileUnsuccessful);
+        }
+        finally
+        {
+            RemoveRequest(activeRequest);
         }
     }
 
@@ -364,22 +394,19 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         _ = CfApi.CfExecute(&operationInfo, &parameters);
     }
 
-    private async Task ObserveRequestAsync(
-        long taskId,
-        long requestKey,
-        ActiveRequest activeRequest,
-        Task task)
+    private void CompleteRequest(ActiveRequest activeRequest, NtStatus status)
     {
-        try
-        {
-            await task.ConfigureAwait(false);
-        }
-        finally
-        {
-            _tasks.TryRemove(taskId, out _);
-            _requests.TryRemove(requestKey, out _);
-            activeRequest.Cancellation.Dispose();
-        }
+        SendFailure(activeRequest, status);
+        RemoveRequest(activeRequest);
+    }
+
+    private void RemoveRequest(ActiveRequest activeRequest)
+    {
+        ((ICollection<KeyValuePair<long, ActiveRequest>>)_requests).Remove(
+            new KeyValuePair<long, ActiveRequest>(
+                activeRequest.RequestKey.Internal,
+                activeRequest));
+        activeRequest.DisposeCancellation();
     }
 
     private unsafe void CancelRequest(CfCallbackInfo* callbackInfo)
@@ -468,6 +495,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private sealed class ActiveRequest
     {
         private int _terminal;
+        private int _cancellationDisposed;
 
         internal ActiveRequest(
             CfConnectionKey connectionKey,
@@ -517,5 +545,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         internal void MarkSuccessful() => Interlocked.Exchange(ref _terminal, 1);
 
         internal bool TryMarkTerminal() => Interlocked.Exchange(ref _terminal, 1) == 0;
+
+        internal void DisposeCancellation()
+        {
+            if (Interlocked.Exchange(ref _cancellationDisposed, 1) == 0)
+            {
+                Cancellation.Dispose();
+            }
+        }
     }
 }

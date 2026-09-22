@@ -1,0 +1,186 @@
+namespace CfSharp.Storage.Sqlite.Tests;
+
+public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
+{
+    private string _temporaryDirectory = null!;
+    private string _syncRootPath = null!;
+    private string _databasePath = null!;
+
+    public Task InitializeAsync()
+    {
+        _temporaryDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "CfSharp-local-feed-tests",
+            Guid.NewGuid().ToString("N"));
+        _syncRootPath = Path.Combine(_temporaryDirectory, "sync-root");
+        _databasePath = Path.Combine(_temporaryDirectory, "state", "state.db");
+        Directory.CreateDirectory(_syncRootPath);
+        return Task.CompletedTask;
+    }
+
+    public Task DisposeAsync()
+    {
+        if (Directory.Exists(_temporaryDirectory))
+        {
+            Directory.Delete(_temporaryDirectory, recursive: true);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task CreateMoveAndDeleteChangesAreDurableAndAcknowledged()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using CloudLocalChangeFeed feed = CreateFeed(store, source);
+        await feed.StartAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Created, "folder\\file.txt"));
+        CloudLocalChangeBatch created = await feed.ReadBatchAsync();
+        CloudLocalChange createdChange = Assert.Single(created.Changes);
+        Assert.Equal(CloudLocalChangeKind.Create, createdChange.Kind);
+        Assert.Equal("folder\\file.txt", createdChange.RelativePath);
+        await feed.AcknowledgeAsync(
+            [new CloudLocalChangeAcknowledgement(createdChange.OperationId, "revision-1")]);
+        await using (ICloudStateTransaction acknowledgedState = await store.BeginTransactionAsync())
+        {
+            CloudItemState? item = await acknowledgedState.Items
+                .GetByRelativePathAsync("folder\\file.txt");
+            Assert.Equal("revision-1", item?.RemoteRevision);
+            await acknowledgedState.RollbackAsync();
+        }
+
+        await source.EmitAsync(new(LocalChangeSourceAction.RenamedOldName, "folder\\file.txt"));
+        await source.EmitAsync(new(LocalChangeSourceAction.RenamedNewName, "folder\\renamed.txt"));
+        CloudLocalChange move = Assert.Single((await feed.ReadBatchAsync()).Changes);
+        Assert.Equal(CloudLocalChangeKind.Move, move.Kind);
+        Assert.Equal("folder\\file.txt", move.PreviousRelativePath);
+        Assert.Equal("folder\\renamed.txt", move.RelativePath);
+        await feed.AcknowledgeAsync([move.OperationId]);
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Deleted, "folder\\renamed.txt"));
+        CloudLocalChange deleted = Assert.Single((await feed.ReadBatchAsync()).Changes);
+        Assert.Equal(CloudLocalChangeKind.Delete, deleted.Kind);
+        await feed.AcknowledgeAsync([deleted.OperationId]);
+
+        await using ICloudStateTransaction transaction = await store.BeginTransactionAsync();
+        Assert.Empty(await transaction.Operations.ListAsync(10));
+        await transaction.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task OverflowRequiresFullRescanAndCanBeCleared()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using CloudLocalChangeFeed feed = CreateFeed(store, source);
+        await feed.StartAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Overflow, string.Empty));
+        CloudLocalChangeBatch rescan = await feed.ReadBatchAsync();
+        Assert.True(rescan.RequiresFullRescan);
+        Assert.Empty(rescan.Changes);
+        await feed.AcknowledgeFullRescanAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Created, "after-rescan.txt"));
+        CloudLocalChangeBatch afterRescan = await feed.ReadBatchAsync();
+        Assert.False(afterRescan.RequiresFullRescan);
+        Assert.Single(afterRescan.Changes);
+    }
+
+    [Fact]
+    public async Task ProviderEchoIsSuppressedAndFeedCanReplayAfterRestart()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using (CloudLocalChangeFeed feed = CreateFeed(store, source))
+        {
+            await feed.StartAsync();
+            await feed.SuppressProviderEchoAsync(
+                CloudStateOperationKind.ContentUpdate,
+                "provider.txt",
+                DateTimeOffset.UtcNow.AddMinutes(1));
+            await source.EmitAsync(new(LocalChangeSourceAction.Modified, "provider.txt"));
+            await Task.Delay(50);
+            await using ICloudStateTransaction transaction = await store.BeginTransactionAsync();
+            Assert.Empty(await transaction.Operations.ListAsync(10));
+            await transaction.RollbackAsync();
+
+            await source.EmitAsync(new(LocalChangeSourceAction.Created, "replay.txt"));
+        }
+
+        FakeSource restartedSource = new();
+        await using CloudLocalChangeFeed restarted = CreateFeed(store, restartedSource);
+        await restarted.StartAsync();
+        CloudLocalChangeBatch replay = await restarted.ReadBatchAsync();
+        Assert.Equal("replay.txt", Assert.Single(replay.Changes).RelativePath);
+    }
+
+    [Fact]
+    public async Task InvalidPathAndChannelOverflowRequireAFullRescan()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using CloudLocalChangeFeed feed = CloudLocalChangeFeed.CreateForTesting(
+            _syncRootPath,
+            store,
+            new CloudLocalChangeFeedOptions { BufferCapacity = 64, BatchSize = 16 },
+            source);
+        await feed.StartAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Created, "..\\outside.txt"));
+        CloudLocalChangeBatch invalidPath = await feed.ReadBatchAsync();
+        Assert.True(invalidPath.RequiresFullRescan);
+        await feed.AcknowledgeFullRescanAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Overflow, string.Empty));
+        CloudLocalChangeBatch overflow = await feed.ReadBatchAsync();
+        Assert.True(overflow.RequiresFullRescan);
+    }
+
+    [Fact]
+    public async Task DuplicateNotificationsAreCoalescedUntilAcknowledgement()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using CloudLocalChangeFeed feed = CreateFeed(store, source);
+        await feed.StartAsync();
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "same.txt"));
+        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "same.txt"));
+        CloudLocalChangeBatch batch = await feed.ReadBatchAsync();
+        Assert.Single(batch.Changes);
+    }
+
+    private CloudLocalChangeFeed CreateFeed(ICloudStateStore store, FakeSource source) =>
+        CloudLocalChangeFeed.CreateForTesting(
+            _syncRootPath,
+            store,
+            new CloudLocalChangeFeedOptions { BufferCapacity = 8, BatchSize = 16 },
+            source);
+
+    private async ValueTask<ICloudStateStore> OpenStoreAsync() =>
+        await new SqliteCloudStateStoreFactory(_databasePath)
+            .OpenAsync(new CloudStateStoreContext(_syncRootPath));
+
+    private sealed class FakeSource : ILocalChangeSource
+    {
+        private Func<LocalChangeSourceEvent, ValueTask>? _handler;
+
+        public Task StartAsync(
+            Func<LocalChangeSourceEvent, ValueTask> eventHandler,
+            CancellationToken cancellationToken)
+        {
+            _handler = eventHandler;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask EmitAsync(LocalChangeSourceEvent change) =>
+            _handler is null
+                ? throw new InvalidOperationException("The fake source has not started.")
+                : _handler(change);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

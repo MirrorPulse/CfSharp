@@ -4,6 +4,8 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
 {
     protected override ICloudStateStoreFactory CreateFactory() => new InMemoryStateStoreFactory();
 
+    internal static ICloudStateStoreFactory CreateFactoryForTesting() => new InMemoryStateStoreFactory();
+
     private sealed class InMemoryStateStoreFactory : ICloudStateStoreFactory
     {
         private readonly MemoryDatabase _database = new();

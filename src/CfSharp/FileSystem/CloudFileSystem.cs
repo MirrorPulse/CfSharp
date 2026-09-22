@@ -21,6 +21,10 @@ namespace CfSharp;
 /// <see cref="CloudSyncRoot.Unregister"/> operation.
 /// </para>
 /// <para>
+/// A local-change feed created after startup is also owned by this instance. It is stopped before
+/// the state store is disposed, while its durable journal entries remain available for replay.
+/// </para>
+/// <para>
 /// Public lifecycle members are safe for concurrent calls. Startup and disposal are serialized.
 /// A failed startup can be retried only when all partially acquired resources were released. Item
 /// operations admitted while started hold explicit resource-lifetime leases. Conflicting path
@@ -40,8 +44,10 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     private readonly SyncRootRegistrationOptions? _registration;
     private readonly ICloudFileContentProvider? _contentProvider;
     private readonly ICloudFileSystemRuntime _runtime;
+    private readonly object _localChangeFeedGate = new();
     private ICloudStateStore? _stateStore;
     private ICloudFileSystemRuntimeSession? _runtimeSession;
+    private CloudLocalChangeFeed? _localChangeFeed;
     private TaskCompletionSource? _operationsDrained;
     private int _activeOperations;
     private int _state = (int)CloudFileSystemLifecycleState.Created;
@@ -71,6 +77,46 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     /// <exception cref="InvalidOperationException">The file system has not finished starting.</exception>
     /// <exception cref="ObjectDisposedException">The file system is stopping or disposed.</exception>
     public CloudDirectory Root => GetDirectory(string.Empty);
+
+    /// <summary>
+    /// Creates or returns the explicit local-change feed owned by this started file system.
+    /// </summary>
+    /// <param name="options">Bounded watcher and delivery settings, or the defaults.</param>
+    /// <returns>A feed that must be started explicitly with <see cref="CloudLocalChangeFeed.StartAsync"/>.</returns>
+    /// <exception cref="InvalidOperationException">The file system has not started.</exception>
+    /// <exception cref="ObjectDisposedException">The file system is stopping or disposed.</exception>
+    /// <remarks>
+    /// Only one feed is created for a file system. The file system stops it before disposing the
+    /// durable state store. The feed does not perform remote synchronization or periodic full
+    /// reconciliation; applications must acknowledge a rescan-required batch only after a full
+    /// reconciliation of <see cref="SyncRootPath"/>.
+    /// </remarks>
+    public CloudLocalChangeFeed CreateLocalChangeFeed(
+        CloudLocalChangeFeedOptions? options = null)
+    {
+        lock (_localChangeFeedGate)
+        {
+            EnsureStarted();
+            return _localChangeFeed ??= new CloudLocalChangeFeed(
+                SyncRootPath,
+                _stateStore ?? throw new InvalidOperationException(
+                    "The cloud file system has no open state store."),
+                options ?? CloudLocalChangeFeedOptions.Default,
+                new WindowsLocalChangeSource(
+                    SyncRootPath,
+                    (options ?? CloudLocalChangeFeedOptions.Default).BufferCapacity),
+                disposedFeed =>
+                {
+                    lock (_localChangeFeedGate)
+                    {
+                        if (ReferenceEquals(_localChangeFeed, disposedFeed))
+                        {
+                            _localChangeFeed = null;
+                        }
+                    }
+                });
+        }
+    }
 
     /// <summary>Creates a mutable builder for one local sync-root directory.</summary>
     /// <param name="syncRootPath">
@@ -460,6 +506,25 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     private async ValueTask<IReadOnlyList<Exception>> DisposeOwnedResourcesAsync()
     {
         List<Exception>? failures = null;
+        CloudLocalChangeFeed? localChangeFeed;
+        lock (_localChangeFeedGate)
+        {
+            localChangeFeed = _localChangeFeed;
+            _localChangeFeed = null;
+        }
+
+        if (localChangeFeed is not null)
+        {
+            try
+            {
+                await localChangeFeed.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+
         if (_runtimeSession is not null)
         {
             try

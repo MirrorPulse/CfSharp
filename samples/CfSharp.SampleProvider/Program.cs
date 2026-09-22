@@ -1,7 +1,7 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
-
 using CfSharp;
 
 return await SampleProvider.RunAsync(args);
@@ -47,7 +47,25 @@ internal static class SampleProvider
         LocalFolderContentProvider provider = new(contentRoot, syncRootPath);
         await using CloudProviderSession session = CloudProviderSession.Connect(syncRoot, provider);
 
-        // Enumerating the root causes Windows to ask the provider for its first ordered page.
+        // Use a separate process for the first enumeration. Windows does not always issue a
+        // FETCH_PLACEHOLDERS callback for an enumeration initiated by the provider process
+        // itself; an external consumer reliably exercises the same shell-facing path.
+        using (Process enumerationProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/d /c dir /s /b \"{syncRootPath}\" > nul",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        })!)
+        {
+            await enumerationProcess.WaitForExitAsync();
+            if (enumerationProcess.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"The external sync-root enumeration failed with exit code {enumerationProcess.ExitCode}.");
+            }
+        }
+
         // Descendant enumeration repeats this for every partial directory and exercises the
         // continuation-token path without requiring the sample to pre-materialize the tree.
         string[] placeholderFiles = Directory

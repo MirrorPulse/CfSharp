@@ -44,6 +44,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private unsafe CfCallbackRegistration* _callbackTable;
     private GCHandle _callbackContext;
     private CfConnectionKey _connectionKey;
+    private long _testingRequestKey;
     private int _stopping;
     private int _disposed;
 
@@ -499,6 +500,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     {
         SemaphoreSlim? populationGate = null;
         bool gateEntered = false;
+        ICloudStateTransaction? stateTransaction = null;
         try
         {
             if (_contentProvider is not ICloudDemandProvider demandProvider)
@@ -520,8 +522,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 .FetchChildrenAsync(request, activeRequest.Cancellation.Token)
                 .ConfigureAwait(false);
             ValidateDirectoryPage(request, page);
+            if (_stateStore is not null)
+            {
+                stateTransaction = await _stateStore
+                    .BeginTransactionAsync(_shutdown.Token)
+                    .ConfigureAwait(false);
+                await PersistDirectoryPageAsync(
+                    request,
+                    page,
+                    stateTransaction).ConfigureAwait(false);
+            }
+
+            // Keep the durable transaction open across the native transfer. A native failure
+            // therefore rolls back the page mappings and checkpoint instead of publishing a
+            // durable continuation for a page Windows did not accept.
             SendPlaceholders(activeRequest, page);
-            await PersistDirectoryPageAsync(request, page).ConfigureAwait(false);
+            if (stateTransaction is not null)
+            {
+                await stateTransaction.CommitAsync(_shutdown.Token).ConfigureAwait(false);
+            }
+
             if (page.ContinuationToken is null)
             {
                 _directoryContinuations.TryRemove(request.NormalizedPath, out _);
@@ -541,6 +561,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
         finally
         {
+            if (stateTransaction is not null)
+            {
+                await stateTransaction.DisposeAsync().ConfigureAwait(false);
+            }
+
             if (gateEntered)
             {
                 populationGate!.Release();
@@ -622,13 +647,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private async ValueTask PersistDirectoryPageAsync(
         CloudProviderFetchPlaceholdersRequest request,
-        CloudProviderDirectoryPage page)
+        CloudProviderDirectoryPage page,
+        ICloudStateTransaction transaction)
     {
-        if (_stateStore is null)
-        {
-            return;
-        }
-
         string directoryPath = ResolveCallbackPath(request.NormalizedPath) ??
             throw new InvalidDataException(
                 $"The directory callback path is outside the connected sync root: '{request.NormalizedPath}'.");
@@ -639,9 +660,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             relativeDirectory = string.Empty;
         }
 
-        await using ICloudStateTransaction transaction = await _stateStore
-            .BeginTransactionAsync(_shutdown.Token)
-            .ConfigureAwait(false);
         DateTimeOffset updatedAt = DateTimeOffset.UtcNow;
         foreach (CloudPlaceholderSpec child in page.Children)
         {
@@ -677,7 +695,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 _shutdown.Token).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(_shutdown.Token).ConfigureAwait(false);
     }
 
     private string? ResolveCallbackPath(string normalizedPath)
@@ -840,6 +857,109 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             cancellationToken => demandProvider.ApproveDehydrateAsync(request, cancellationToken),
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
         EnqueuePolicyRequest(activeRequest);
+    }
+
+    internal unsafe void DispatchPolicyCallbackForTesting(
+        CloudProviderRequestKind kind,
+        string normalizedPath,
+        string? targetPath = null,
+        bool isDirectory = false,
+        bool isUndelete = false,
+        bool isBackground = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(normalizedPath);
+        if (kind is not (CloudProviderRequestKind.Dehydrate or
+            CloudProviderRequestKind.Delete or
+            CloudProviderRequestKind.Rename))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "The callback is not a policy callback.");
+        }
+
+        char[] path = (normalizedPath + '\0').ToCharArray();
+        char[] target = targetPath is null ? ['\0'] : (targetPath + '\0').ToCharArray();
+        byte[] identity = [1, 2, 3, 4];
+        fixed (char* pathPointer = path)
+        fixed (char* targetPointer = target)
+        fixed (byte* identityPointer = identity)
+        {
+            CfCallbackInfo callbackInfo = new()
+            {
+                StructSize = (uint)sizeof(CfCallbackInfo),
+                ConnectionKey = new CfConnectionKey { Internal = 1 },
+                FileIdentity = identityPointer,
+                FileIdentityLength = (uint)identity.Length,
+                NormalizedPath = pathPointer,
+                TransferKey = new CfTransferKey { Internal = 2 },
+                RequestKey = new CfRequestKey
+                {
+                    Internal = Interlocked.Increment(ref _testingRequestKey),
+                },
+            };
+            CfCallbackParameters callbackParameters = default;
+            switch (kind)
+            {
+                case CloudProviderRequestKind.Dehydrate:
+                    callbackParameters.Dehydrate = new CfCallbackDehydrateParameters
+                    {
+                        Flags = isBackground
+                            ? CfCallbackDehydrateFlags.Background
+                            : CfCallbackDehydrateFlags.None,
+                        Reason = CfCallbackDehydrationReason.UserManual,
+                    };
+                    DispatchDehydrate(&callbackInfo, &callbackParameters);
+                    break;
+                case CloudProviderRequestKind.Delete:
+                    callbackParameters.Delete = new CfCallbackDeleteParameters
+                    {
+                        Flags = (isDirectory ? CfCallbackDeleteFlags.IsDirectory : CfCallbackDeleteFlags.None) |
+                            (isUndelete ? CfCallbackDeleteFlags.IsUndelete : CfCallbackDeleteFlags.None),
+                    };
+                    DispatchDelete(&callbackInfo, &callbackParameters);
+                    break;
+                case CloudProviderRequestKind.Rename:
+                    callbackParameters.Rename = new CfCallbackRenameParameters
+                    {
+                        Flags = (isDirectory ? CfCallbackRenameFlags.IsDirectory : CfCallbackRenameFlags.None) |
+                            CfCallbackRenameFlags.SourceInScope |
+                            CfCallbackRenameFlags.TargetInScope,
+                        TargetPath = targetPointer,
+                    };
+                    DispatchRename(&callbackInfo, &callbackParameters);
+                    break;
+            }
+        }
+    }
+
+    internal unsafe void DispatchCompletionCallbackForTesting(
+        CloudProviderNotificationKind kind,
+        string normalizedPath,
+        string? relatedPath = null,
+        uint flags = 0)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(normalizedPath);
+        char[] path = (normalizedPath + '\0').ToCharArray();
+        fixed (char* pathPointer = path)
+        {
+            CfCallbackInfo callbackInfo = new()
+            {
+                StructSize = (uint)sizeof(CfCallbackInfo),
+                ConnectionKey = new CfConnectionKey { Internal = 1 },
+                NormalizedPath = pathPointer,
+                TransferKey = new CfTransferKey { Internal = 3 },
+                RequestKey = new CfRequestKey
+                {
+                    Internal = Interlocked.Increment(ref _testingRequestKey),
+                },
+            };
+            DispatchCompletion(
+                &callbackInfo,
+                new CloudProviderCompletionNotification(
+                    kind,
+                    normalizedPath,
+                    ReadOnlySpan<byte>.Empty,
+                    flags,
+                    relatedPath));
+        }
     }
 
     private unsafe void DispatchDelete(

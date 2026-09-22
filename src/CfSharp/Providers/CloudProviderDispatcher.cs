@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Threading.Channels;
 
 namespace CfSharp;
@@ -80,9 +79,11 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<CloudProviderRequestKind, SemaphoreSlim> _limits;
     private readonly Task[] _workers;
-    private readonly ConcurrentBag<CloudProviderWorkItem> _active = new();
+    private readonly object _activeGate = new();
+    private readonly HashSet<CloudProviderWorkItem> _active = [];
     private int _accepting = 1;
     private int _disposed;
+    private int _resourcesDisposed;
 
     internal CloudProviderDispatcher(CloudProviderSessionOptions options)
     {
@@ -144,18 +145,23 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             queued.Cancel();
         }
 
-        foreach (CloudProviderWorkItem active in _active)
+        CloudProviderWorkItem[] activeWork;
+        lock (_activeGate)
+        {
+            activeWork = [.. _active];
+        }
+
+        foreach (CloudProviderWorkItem active in activeWork)
         {
             active.Cancel();
         }
 
+        Task workers = Task.WhenAll(_workers);
+        bool workersCompleted = false;
         try
         {
-            await Task.WhenAll(_workers).WaitAsync(timeout).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // The shutdown token is an expected part of the bounded drain.
+            await workers.WaitAsync(timeout).ConfigureAwait(false);
+            workersCompleted = true;
         }
         catch (TimeoutException)
         {
@@ -163,10 +169,13 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         }
         finally
         {
-            _shutdown.Dispose();
-            foreach (SemaphoreSlim limit in _limits.Values)
+            if (workersCompleted)
             {
-                limit.Dispose();
+                DisposeOwnedResources();
+            }
+            else
+            {
+                _ = DisposeOwnedResourcesAfterWorkersAsync(workers);
             }
         }
     }
@@ -202,12 +211,27 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             return;
         }
 
+        bool registered = false;
+        lock (_activeGate)
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                _active.Add(workItem);
+                registered = true;
+            }
+        }
+
+        if (!registered)
+        {
+            workItem.Cancel();
+            return;
+        }
+
         bool acquired = false;
         try
         {
             await limit.WaitAsync(workItem.Cancellation.Token).ConfigureAwait(false);
             acquired = true;
-            _active.Add(workItem);
             await workItem.RunAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (workItem.Cancellation.IsCancellationRequested)
@@ -220,11 +244,46 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         }
         finally
         {
-            _active.TryTake(out _);
+            lock (_activeGate)
+            {
+                _active.Remove(workItem);
+            }
+
             if (acquired)
             {
                 limit.Release();
             }
+        }
+    }
+
+    private async Task DisposeOwnedResourcesAfterWorkersAsync(Task workers)
+    {
+        try
+        {
+            await workers.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Work-item failures are translated at the work-item boundary. This catch protects
+            // deferred cleanup if an unexpected worker failure reaches the aggregate task.
+        }
+        finally
+        {
+            DisposeOwnedResources();
+        }
+    }
+
+    private void DisposeOwnedResources()
+    {
+        if (Interlocked.Exchange(ref _resourcesDisposed, 1) != 0)
+        {
+            return;
+        }
+
+        _shutdown.Dispose();
+        foreach (SemaphoreSlim limit in _limits.Values)
+        {
+            limit.Dispose();
         }
     }
 }

@@ -392,6 +392,41 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 cancellationToken).ConfigureAwait(false);
         }
 
+        public async ValueTask<IReadOnlyList<CloudStateCheckpoint>> ListAsync(
+            string namePrefix,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(namePrefix);
+            return await _owner.ExecuteAsync(
+                async token =>
+                {
+                    await using SqliteCommand command = _owner.CreateCommand(
+                        """
+                        SELECT name, value, updated_at_ticks
+                        FROM checkpoints
+                        WHERE substr(name, 1, length($prefix)) = $prefix
+                        ORDER BY name COLLATE BINARY;
+                        """,
+                        token);
+                    command.Parameters.AddWithValue("$prefix", namePrefix);
+                    await using SqliteDataReader reader = await command
+                        .ExecuteReaderAsync(token)
+                        .ConfigureAwait(false);
+                    List<CloudStateCheckpoint> checkpoints = [];
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        checkpoints.Add(new CloudStateCheckpoint(
+                            reader.GetString(0),
+                            ReadBytes(reader, 1),
+                            FromUtcTicks(reader.GetInt64(2))));
+                    }
+
+                    return (IReadOnlyList<CloudStateCheckpoint>)checkpoints;
+                },
+                "The SQLite checkpoints could not be listed.",
+                cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask UpsertAsync(
             CloudStateCheckpoint checkpoint,
             CancellationToken cancellationToken = default)

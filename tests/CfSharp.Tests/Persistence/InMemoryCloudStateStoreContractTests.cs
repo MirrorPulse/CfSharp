@@ -163,6 +163,20 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
             return ValueTask.FromResult(checkpoint);
         }
 
+        ValueTask<IReadOnlyList<CloudStateCheckpoint>> ICloudCheckpointRepository.ListAsync(
+            string namePrefix,
+            CancellationToken cancellationToken)
+        {
+            CheckActive(cancellationToken);
+            ArgumentNullException.ThrowIfNull(namePrefix);
+            IReadOnlyList<CloudStateCheckpoint> checkpoints = _state.Checkpoints
+                .Where(pair => pair.Key.StartsWith(namePrefix, StringComparison.Ordinal))
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => pair.Value)
+                .ToArray();
+            return ValueTask.FromResult(checkpoints);
+        }
+
         ValueTask ICloudCheckpointRepository.UpsertAsync(
             CloudStateCheckpoint checkpoint,
             CancellationToken cancellationToken)

@@ -90,6 +90,10 @@ public sealed class ProviderCallbackMatrixTests
             Assert.True(renameRequest.SourceInScope);
             Assert.True(renameRequest.TargetInScope);
 
+            session.SetDirectoryContinuationForTesting("\\callback.bin", "stale-source");
+            session.SetDirectoryContinuationForTesting("\\callback.bin\\child", "stale-child");
+            session.SetDirectoryContinuationForTesting("\\renamed.bin", "stale-target");
+
             session.DispatchCompletionCallbackForTesting(
                 CloudProviderNotificationKind.DehydrateCompleted,
                 "\\callback.bin",
@@ -117,6 +121,9 @@ public sealed class ProviderCallbackMatrixTests
             Assert.Equal(3u, deleteCompletion.Flags);
             Assert.Equal("\\callback.bin", renameCompletion.RelatedPath);
             Assert.Equal(4u, renameCompletion.Flags);
+            Assert.False(session.HasDirectoryContinuationForTesting("\\callback.bin"));
+            Assert.False(session.HasDirectoryContinuationForTesting("\\callback.bin\\child"));
+            Assert.False(session.HasDirectoryContinuationForTesting("\\renamed.bin"));
 
             await session.DisposeAsync();
             session = null;

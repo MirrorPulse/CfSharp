@@ -36,6 +36,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
     private readonly ConcurrentDictionary<long, CallbackRequest> _callbackRequests = new();
+    private readonly ConcurrentDictionary<long, NotificationRequest> _notificationRequests = new();
     private readonly ConcurrentDictionary<string, string> _directoryContinuations = new(
         StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _directoryPopulationGates = new(
@@ -45,6 +46,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private GCHandle _callbackContext;
     private CfConnectionKey _connectionKey;
     private long _testingRequestKey;
+    private long _notificationRegistryKey;
     private int _stopping;
     private int _disposed;
 
@@ -124,6 +126,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Synchronously stops the provider session and releases its callback resources.</summary>
+    /// <remarks>
+    /// This compatibility method blocks the calling thread while cooperative handlers drain,
+    /// for up to <see cref="CloudProviderSessionOptions.ShutdownTimeout"/>. Applications with a
+    /// UI or single-threaded synchronization context should call <see cref="DisposeAsync"/>
+    /// instead and await it. The asynchronous implementation does not capture that context.
+    /// </remarks>
     public void Dispose()
     {
         DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -149,6 +157,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             }
 
             foreach (CallbackRequest request in _callbackRequests.Values)
+            {
+                request.Cancel();
+            }
+
+            foreach (NotificationRequest request in _notificationRequests.Values)
             {
                 request.Cancel();
             }
@@ -1102,13 +1115,14 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             return;
         }
 
+        long registryKey = Interlocked.Increment(ref _notificationRegistryKey);
         NotificationRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
             callbackInfo->RequestKey,
             notification,
-            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
-        long requestKey = callbackInfo->RequestKey.Internal;
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token),
+            registryKey);
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -1118,7 +1132,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            if (!_notificationRequests.TryAdd(registryKey, activeRequest))
             {
                 activeRequest.DisposeCancellation();
                 return;
@@ -1128,11 +1142,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 CloudProviderRequestKind.CompletionNotification,
                 activeRequest.Cancellation,
                 _ => new ValueTask(ProcessCompletionAsync(activeRequest, demandProvider)),
-                () => RemoveCallbackRequest(activeRequest),
-                _ => RemoveCallbackRequest(activeRequest));
+                () => RemoveNotificationRequest(activeRequest),
+                _ => RemoveNotificationRequest(activeRequest));
             if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
             {
-                RemoveCallbackRequest(activeRequest);
+                RemoveNotificationRequest(activeRequest);
             }
         }
     }
@@ -1141,6 +1155,21 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         NotificationRequest activeRequest,
         ICloudDemandProvider demandProvider)
     {
+        try
+        {
+            await InvalidateDirectoryContinuationsAsync(
+                activeRequest.Notification).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // State invalidation is best effort during shutdown; the notification still gets
+            // offered to the provider below with its canceled token.
+        }
+        catch (Exception)
+        {
+            // A state-store failure must not suppress the completed native notification.
+        }
+
         try
         {
             await demandProvider.OnCompletionAsync(
@@ -1157,9 +1186,130 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
         finally
         {
-            RemoveCallbackRequest(activeRequest);
+            RemoveNotificationRequest(activeRequest);
         }
     }
+
+    private void RemoveNotificationRequest(NotificationRequest activeRequest)
+    {
+        ((ICollection<KeyValuePair<long, NotificationRequest>>)_notificationRequests).Remove(
+            new KeyValuePair<long, NotificationRequest>(
+                activeRequest.RegistryKey,
+                activeRequest));
+        activeRequest.DisposeCancellation();
+    }
+
+    private async ValueTask InvalidateDirectoryContinuationsAsync(
+        CloudProviderCompletionNotification notification)
+    {
+        if (notification.Kind is not (CloudProviderNotificationKind.DeleteCompleted or
+            CloudProviderNotificationKind.RenameCompleted))
+        {
+            return;
+        }
+
+        List<string> paths = [notification.NormalizedPath];
+        if (notification.RelatedPath is not null)
+        {
+            paths.Add(notification.RelatedPath);
+        }
+
+        HashSet<string> invalidationPaths = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            invalidationPaths.Add(NormalizeContinuationPath(path));
+            string? resolved = ResolveCallbackPath(path);
+            if (resolved is not null)
+            {
+                invalidationPaths.Add(NormalizeContinuationPath(resolved));
+            }
+        }
+
+        if (invalidationPaths.Count == 0)
+        {
+            return;
+        }
+
+        List<string> staleMemoryKeys = [];
+        foreach (string existingPath in _directoryContinuations.Keys)
+        {
+            string normalizedExisting = NormalizeContinuationPath(existingPath);
+            if (invalidationPaths.Any(path => IsContinuationPathOrDescendant(
+                normalizedExisting,
+                path)))
+            {
+                staleMemoryKeys.Add(existingPath);
+            }
+        }
+
+        if (_stateStore is null)
+        {
+            foreach (string staleMemoryKey in staleMemoryKeys)
+            {
+                _directoryContinuations.TryRemove(staleMemoryKey, out _);
+            }
+
+            return;
+        }
+
+        await using ICloudStateTransaction transaction = await _stateStore
+            .BeginTransactionAsync(_shutdown.Token)
+            .ConfigureAwait(false);
+        HashSet<string> removedCheckpoints = new(StringComparer.Ordinal);
+        foreach (string path in invalidationPaths)
+        {
+            string checkpointPrefix = GetDirectoryCheckpointName(path);
+            IReadOnlyList<CloudStateCheckpoint> checkpoints = await transaction.Checkpoints
+                .ListAsync(checkpointPrefix, _shutdown.Token)
+                .ConfigureAwait(false);
+            foreach (CloudStateCheckpoint checkpoint in checkpoints)
+            {
+                string checkpointPath = NormalizeContinuationPath(
+                    checkpoint.Name["cfsharp.directory.".Length..]);
+                if (IsContinuationPathOrDescendant(checkpointPath, path) &&
+                    removedCheckpoints.Add(checkpoint.Name))
+                {
+                    await transaction.Checkpoints.RemoveAsync(
+                        checkpoint.Name,
+                        _shutdown.Token).ConfigureAwait(false);
+                }
+            }
+        }
+
+        await transaction.CommitAsync(_shutdown.Token).ConfigureAwait(false);
+        foreach (string staleMemoryKey in staleMemoryKeys)
+        {
+            _directoryContinuations.TryRemove(staleMemoryKey, out _);
+        }
+    }
+
+    private static string NormalizeContinuationPath(string path) =>
+        path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .TrimEnd(Path.DirectorySeparatorChar);
+
+    private static bool IsContinuationPathOrDescendant(string candidate, string parent)
+    {
+        if (candidate.Equals(parent, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string prefix = parent.EndsWith(Path.DirectorySeparatorChar)
+            ? parent
+            : parent + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal void SetDirectoryContinuationForTesting(string path, string token) =>
+        _directoryContinuations[path] = token;
+
+    internal bool HasDirectoryContinuationForTesting(string path) =>
+        _directoryContinuations.ContainsKey(path);
 
     private static async ValueTask<int> ReadExactlyAsync(
         Stream source,
@@ -2066,12 +2216,16 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             CfTransferKey transferKey,
             CfRequestKey requestKey,
             CloudProviderCompletionNotification notification,
-            CancellationTokenSource cancellation)
+            CancellationTokenSource cancellation,
+            long registryKey)
             : base(connectionKey, transferKey, requestKey, cancellation)
         {
             Notification = notification;
+            RegistryKey = registryKey;
         }
 
         internal CloudProviderCompletionNotification Notification { get; }
+
+        internal long RegistryKey { get; }
     }
 }

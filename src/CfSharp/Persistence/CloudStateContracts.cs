@@ -150,6 +150,14 @@ public interface ICloudCheckpointRepository
         string name,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Lists checkpoints whose names equal or are descendants of a prefix.</summary>
+    /// <param name="namePrefix">Case-sensitive checkpoint-name prefix.</param>
+    /// <param name="cancellationToken">Token used to cancel the read.</param>
+    /// <returns>Matching checkpoints in deterministic ordinal-name order.</returns>
+    ValueTask<IReadOnlyList<CloudStateCheckpoint>> ListAsync(
+        string namePrefix,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Inserts or replaces a checkpoint.</summary>
     ValueTask UpsertAsync(
         CloudStateCheckpoint checkpoint,

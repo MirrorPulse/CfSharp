@@ -257,6 +257,11 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Synchronously releases process resources without unregistering the sync root.</summary>
+    /// <remarks>
+    /// This compatibility method blocks the calling thread until admitted operations and owned
+    /// resources finish disposal. Applications with a UI or single-threaded synchronization
+    /// context should call <see cref="DisposeAsync"/> instead and await it.
+    /// </remarks>
     /// <exception cref="AggregateException">
     /// More than one owned resource failed during disposal. Every resource is still attempted.
     /// Failed resources remain owned so disposal can be retried.

@@ -43,6 +43,31 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     protected override CloudStateStoreContext CreateContext() => new(_syncRootPath);
 
     [Fact]
+    public async Task CheckpointPrefixQueryListsOnlyTheRequestedDirectorySubtree()
+    {
+        await using ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
+        {
+            await write.Checkpoints.UpsertAsync(
+                new CloudStateCheckpoint("cfsharp.directory.\\root", [1], now));
+            await write.Checkpoints.UpsertAsync(
+                new CloudStateCheckpoint("cfsharp.directory.\\root\\child", [2], now));
+            await write.Checkpoints.UpsertAsync(
+                new CloudStateCheckpoint("cfsharp.directory.\\other", [3], now));
+            await write.CommitAsync();
+        }
+
+        await using ICloudStateTransaction read = await store.BeginTransactionAsync();
+        IReadOnlyList<CloudStateCheckpoint> checkpoints = await read.Checkpoints
+            .ListAsync("cfsharp.directory.\\root");
+        Assert.Equal(
+            ["cfsharp.directory.\\root", "cfsharp.directory.\\root\\child"],
+            checkpoints.Select(checkpoint => checkpoint.Name).ToArray());
+        await read.RollbackAsync();
+    }
+
+    [Fact]
     public async Task DatabaseInsideSyncRootIsRejected()
     {
         SqliteCloudStateStoreFactory factory = new(

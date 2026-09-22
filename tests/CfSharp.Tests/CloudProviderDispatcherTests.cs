@@ -79,4 +79,83 @@ public sealed class CloudProviderDispatcherTests
         await dispatcher.DisposeAsync(TimeSpan.FromSeconds(5));
         await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
+
+    [Fact]
+    public async Task AvailableKindIsNotBlockedByAnotherKindWaitingForItsPermit()
+    {
+        CloudProviderSessionOptions options = new()
+        {
+            QueueCapacity = 8,
+            WorkerCount = 2,
+            MaxConcurrentDataRequests = 1,
+            MaxConcurrentPlaceholderRequests = 1,
+        };
+        CloudProviderDispatcher dispatcher = new(options);
+        TaskCompletionSource firstDataStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFirstData = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource placeholderStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        CloudProviderWorkItem firstData = new(
+            CloudProviderRequestKind.FetchData,
+            new CancellationTokenSource(),
+            async _ =>
+            {
+                firstDataStarted.TrySetResult();
+                await releaseFirstData.Task;
+            },
+            () => { },
+            _ => { });
+        CloudProviderWorkItem secondData = new(
+            CloudProviderRequestKind.FetchData,
+            new CancellationTokenSource(),
+            _ => ValueTask.CompletedTask,
+            () => { },
+            _ => { });
+        CloudProviderWorkItem placeholder = new(
+            CloudProviderRequestKind.FetchPlaceholders,
+            new CancellationTokenSource(),
+            _ =>
+            {
+                placeholderStarted.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            () => { },
+            _ => { });
+
+        Assert.True(dispatcher.TryEnqueue(firstData));
+        await firstDataStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(dispatcher.TryEnqueue(secondData));
+        Assert.True(dispatcher.TryEnqueue(placeholder));
+
+        await placeholderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseFirstData.TrySetResult();
+        await dispatcher.DisposeAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ShutdownIgnoresRequestTokenDisposedByCompletionRace()
+    {
+        CloudProviderSessionOptions options = new() { QueueCapacity = 2, WorkerCount = 2 };
+        CloudProviderDispatcher dispatcher = new(options);
+        CancellationTokenSource cancellation = new();
+        TaskCompletionSource tokenDisposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        CloudProviderWorkItem work = new(
+            CloudProviderRequestKind.FetchData,
+            cancellation,
+            async _ =>
+            {
+                cancellation.Dispose();
+                tokenDisposed.TrySetResult();
+                await release.Task;
+            },
+            () => { },
+            _ => { });
+
+        Assert.True(dispatcher.TryEnqueue(work));
+        await tokenDisposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Task disposal = dispatcher.DisposeAsync(TimeSpan.FromSeconds(5)).AsTask();
+        release.TrySetResult();
+        await disposal;
+    }
 }

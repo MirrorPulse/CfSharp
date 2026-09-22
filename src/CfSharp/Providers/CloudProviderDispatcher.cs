@@ -8,7 +8,9 @@ internal sealed class CloudProviderWorkItem
     private readonly Func<CancellationToken, ValueTask> _handler;
     private readonly Action _cancelled;
     private readonly Action<Exception> _failed;
-    private int _completed;
+    // Guards the exactly-once terminal action. It is claimed when work starts or is canceled;
+    // it does not mean that the provider handler has finished executing.
+    private int _terminalClaimed;
 
     internal CloudProviderWorkItem(
         CloudProviderRequestKind kind,
@@ -30,7 +32,7 @@ internal sealed class CloudProviderWorkItem
 
     internal async ValueTask RunAsync()
     {
-        if (Interlocked.Exchange(ref _completed, 1) != 0)
+        if (Interlocked.Exchange(ref _terminalClaimed, 1) != 0)
         {
             return;
         }
@@ -39,9 +41,26 @@ internal sealed class CloudProviderWorkItem
         {
             await _handler(Cancellation.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (Cancellation.IsCancellationRequested)
+        catch (OperationCanceledException exception)
         {
-            _cancelled();
+            bool cancellationRequested;
+            try
+            {
+                cancellationRequested = Cancellation.IsCancellationRequested;
+            }
+            catch (ObjectDisposedException)
+            {
+                cancellationRequested = true;
+            }
+
+            if (cancellationRequested)
+            {
+                _cancelled();
+            }
+            else
+            {
+                _failed(exception);
+            }
         }
         catch (Exception exception)
         {
@@ -51,8 +70,17 @@ internal sealed class CloudProviderWorkItem
 
     internal void Cancel()
     {
-        Cancellation.Cancel();
-        if (Interlocked.Exchange(ref _completed, 1) == 0)
+        try
+        {
+            Cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The owning session may complete and dispose the request token before the
+            // dispatcher observes the work item during shutdown.
+        }
+
+        if (Interlocked.Exchange(ref _terminalClaimed, 1) == 0)
         {
             _cancelled();
         }
@@ -60,7 +88,7 @@ internal sealed class CloudProviderWorkItem
 
     internal void Fail(Exception exception)
     {
-        if (Interlocked.Exchange(ref _completed, 1) == 0)
+        if (Interlocked.Exchange(ref _terminalClaimed, 1) == 0)
         {
             _failed(exception);
         }
@@ -78,6 +106,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
     private readonly Channel<CloudProviderWorkItem> _queue;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<CloudProviderRequestKind, SemaphoreSlim> _limits;
+    private readonly SemaphoreSlim _workerSlots;
     private readonly Task[] _workers;
     private readonly object _activeGate = new();
     private readonly HashSet<CloudProviderWorkItem> _active = [];
@@ -106,6 +135,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             [CloudProviderRequestKind.Rename] = new(options.MaxConcurrentPolicyRequests),
             [CloudProviderRequestKind.CompletionNotification] = new(options.MaxConcurrentPolicyRequests),
         };
+        _workerSlots = new SemaphoreSlim(options.WorkerCount, options.WorkerCount);
         _workers = Enumerable.Range(0, options.WorkerCount)
             .Select(_ => WorkerLoopAsync())
             .ToArray();
@@ -137,29 +167,29 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             return;
         }
 
-        StopAccepting();
-        _queue.Writer.TryComplete();
-        _shutdown.Cancel();
-        while (_queue.Reader.TryRead(out CloudProviderWorkItem? queued))
-        {
-            queued.Cancel();
-        }
-
-        CloudProviderWorkItem[] activeWork;
-        lock (_activeGate)
-        {
-            activeWork = [.. _active];
-        }
-
-        foreach (CloudProviderWorkItem active in activeWork)
-        {
-            active.Cancel();
-        }
-
         Task workers = Task.WhenAll(_workers);
         bool workersCompleted = false;
         try
         {
+            StopAccepting();
+            _queue.Writer.TryComplete();
+            _shutdown.Cancel();
+            while (_queue.Reader.TryRead(out CloudProviderWorkItem? queued))
+            {
+                queued.Cancel();
+            }
+
+            CloudProviderWorkItem[] activeWork;
+            lock (_activeGate)
+            {
+                activeWork = [.. _active];
+            }
+
+            foreach (CloudProviderWorkItem active in activeWork)
+            {
+                active.Cancel();
+            }
+
             await workers.WaitAsync(timeout).ConfigureAwait(false);
             workersCompleted = true;
         }
@@ -184,13 +214,16 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
 
     private async Task WorkerLoopAsync()
     {
+        List<Task> scheduled = [];
         try
         {
             while (await _queue.Reader.WaitToReadAsync(_shutdown.Token).ConfigureAwait(false))
             {
                 while (_queue.Reader.TryRead(out CloudProviderWorkItem? workItem))
                 {
-                    await RunWorkItemAsync(workItem).ConfigureAwait(false);
+                    // Do not await a per-kind semaphore here. The scheduling task can wait for
+                    // that permit while another kind uses an available worker slot.
+                    scheduled.Add(RunWorkItemAsync(workItem).AsTask());
                 }
             }
         }
@@ -199,6 +232,18 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             while (_queue.Reader.TryRead(out CloudProviderWorkItem? queued))
             {
                 queued.Cancel();
+            }
+        }
+        finally
+        {
+            try
+            {
+                await Task.WhenAll(scheduled).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Work-item failures are translated at the work-item boundary. This catch
+                // prevents one unexpected task from terminating the worker aggregate early.
             }
         }
     }
@@ -228,13 +273,16 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         }
 
         bool acquired = false;
+        bool workerSlotAcquired = false;
         try
         {
             await limit.WaitAsync(workItem.Cancellation.Token).ConfigureAwait(false);
             acquired = true;
+            await _workerSlots.WaitAsync(workItem.Cancellation.Token).ConfigureAwait(false);
+            workerSlotAcquired = true;
             await workItem.RunAsync().ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (workItem.Cancellation.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             workItem.Cancel();
         }
@@ -252,6 +300,11 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             if (acquired)
             {
                 limit.Release();
+            }
+
+            if (workerSlotAcquired)
+            {
+                _workerSlots.Release();
             }
         }
     }
@@ -281,6 +334,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         }
 
         _shutdown.Dispose();
+        _workerSlots.Dispose();
         foreach (SemaphoreSlim limit in _limits.Values)
         {
             limit.Dispose();

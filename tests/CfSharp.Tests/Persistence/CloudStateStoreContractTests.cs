@@ -177,6 +177,7 @@ public abstract class CloudStateStoreContractTests
 
         Assert.NotNull(checkpoint);
         Assert.True(checkpoint.Value.Span.SequenceEqual(new byte[] { 1, 2 }));
+        Assert.Single(await read.Checkpoints.ListAsync("rem"));
         Assert.NotNull(operation);
         Assert.Equal(1, operation.Sequence);
         Assert.True(operation.Payload.Span.SequenceEqual(new byte[] { 3, 4 }));

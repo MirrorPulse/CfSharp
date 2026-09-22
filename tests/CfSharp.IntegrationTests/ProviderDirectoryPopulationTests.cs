@@ -81,9 +81,7 @@ public sealed class ProviderDirectoryPopulationTests
                 $"Unexpected normalized callback path: {request.NormalizedPath}");
             Assert.Equal("*", request.SearchPattern);
             Assert.True(File.Exists(Path.Combine(rootPath, "remote", "child.txt")));
-            CloudItemSnapshot childSnapshot = await fileSystem
-                .GetFile("remote/child.txt")
-                .InspectAsync();
+            CloudItemSnapshot childSnapshot = await WaitForDurableChildAsync(fileSystem);
             Assert.Equal("remote-child", childSnapshot.RemoteId);
             Assert.NotNull(childSnapshot.DurableStateUpdatedAt);
             Assert.Equal(1, provider.RequestCount);
@@ -117,6 +115,26 @@ public sealed class ProviderDirectoryPopulationTests
                 Directory.Delete(testPath, recursive: true);
             }
         }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static async Task<CloudItemSnapshot> WaitForDurableChildAsync(
+        CloudFileSystem fileSystem)
+    {
+        CloudFile child = fileSystem.GetFile("remote/child.txt");
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            CloudItemSnapshot snapshot = await child.InspectAsync();
+            if (snapshot.RemoteId is not null)
+            {
+                return snapshot;
+            }
+
+            await Task.Delay(25);
+        }
+
+        return await child.InspectAsync();
     }
 
     private sealed class DemandProvider : ICloudDemandProvider

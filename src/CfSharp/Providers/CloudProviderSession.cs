@@ -629,11 +629,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             return;
         }
 
-        string? directoryPath = ResolveCallbackPath(request.NormalizedPath);
-        if (directoryPath is null)
-        {
-            return;
-        }
+        string directoryPath = ResolveCallbackPath(request.NormalizedPath) ??
+            throw new InvalidDataException(
+                $"The directory callback path is outside the connected sync root: '{request.NormalizedPath}'.");
 
         string relativeDirectory = Path.GetRelativePath(_syncRootPath, directoryPath);
         if (relativeDirectory == ".")
@@ -684,17 +682,39 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private string? ResolveCallbackPath(string normalizedPath)
     {
-        if (string.IsNullOrWhiteSpace(normalizedPath))
+        if (string.IsNullOrWhiteSpace(normalizedPath) ||
+            (normalizedPath.Length == 1 &&
+                (normalizedPath[0] == Path.DirectorySeparatorChar ||
+                    normalizedPath[0] == Path.AltDirectorySeparatorChar)))
         {
-            return null;
+            return _syncRootPath;
         }
 
         string rootPrefix = _syncRootPath + Path.DirectorySeparatorChar;
-        string candidate = normalizedPath.StartsWith(Path.DirectorySeparatorChar)
-            ? Path.GetFullPath(Path.Combine(
+        string candidate;
+        if (Path.IsPathFullyQualified(normalizedPath))
+        {
+            candidate = Path.GetFullPath(normalizedPath);
+        }
+        else if (normalizedPath.StartsWith(Path.DirectorySeparatorChar) ||
+            normalizedPath.StartsWith(Path.AltDirectorySeparatorChar))
+        {
+            string relative = normalizedPath.TrimStart(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string driveCandidate = Path.GetFullPath(Path.Combine(
                 Path.GetPathRoot(_syncRootPath) ?? _syncRootPath,
-                normalizedPath.TrimStart(Path.DirectorySeparatorChar)))
-            : Path.GetFullPath(normalizedPath);
+                relative));
+            candidate = driveCandidate.Equals(_syncRootPath, StringComparison.OrdinalIgnoreCase) ||
+                driveCandidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                ? driveCandidate
+                : Path.GetFullPath(Path.Combine(_syncRootPath, relative));
+        }
+        else
+        {
+            candidate = Path.GetFullPath(Path.Combine(_syncRootPath, normalizedPath));
+        }
+
         return candidate.Equals(_syncRootPath, StringComparison.OrdinalIgnoreCase) ||
             candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
             ? candidate

@@ -81,6 +81,11 @@ public sealed class ProviderDirectoryPopulationTests
                 $"Unexpected normalized callback path: {request.NormalizedPath}");
             Assert.Equal("*", request.SearchPattern);
             Assert.True(File.Exists(Path.Combine(rootPath, "remote", "child.txt")));
+            CloudItemSnapshot childSnapshot = await fileSystem
+                .GetFile("remote/child.txt")
+                .InspectAsync();
+            Assert.Equal("remote-child", childSnapshot.RemoteId);
+            Assert.NotNull(childSnapshot.DurableStateUpdatedAt);
             Assert.Equal(1, provider.RequestCount);
 
             await fileSystem.DisposeAsync();

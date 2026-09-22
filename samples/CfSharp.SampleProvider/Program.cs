@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 using CfSharp;
@@ -37,67 +39,65 @@ internal static class SampleProvider
                 .WithProviderId(ProviderId)
                 .WithSyncRootIdentity(ProviderId.ToByteArray())
                 .WithHydrationPolicy(CloudHydrationPolicy.Progressive)
-                .WithPopulationPolicy(CloudPopulationPolicy.AlwaysFull)
+                .WithPopulationPolicy(CloudPopulationPolicy.Partial)
                 .WithRootMarkedInSync()
                 .Build();
         CloudSyncRoot syncRoot = CloudSyncRoot.Register(syncRootPath, registration);
 
-        await using CloudProviderSession session = CloudProviderSession.Connect(
-            syncRoot,
-            new LocalFolderContentProvider(contentRoot));
+        LocalFolderContentProvider provider = new(contentRoot, syncRootPath);
+        await using CloudProviderSession session = CloudProviderSession.Connect(syncRoot, provider);
 
-        int created = 0;
-        int verified = 0;
-        foreach (string contentFile in Directory.EnumerateFiles(
-            contentRoot,
-            "*",
-            SearchOption.AllDirectories))
+        // Enumerating the root causes Windows to ask the provider for its first ordered page.
+        // Descendant enumeration repeats this for every partial directory and exercises the
+        // continuation-token path without requiring the sample to pre-materialize the tree.
+        string[] placeholderFiles = Directory
+            .EnumerateFiles(syncRootPath, "*", SearchOption.AllDirectories)
+            .ToArray();
+        List<Task<byte[]>> randomReads = [];
+        foreach (string placeholderFile in placeholderFiles.Take(4))
         {
-            string relativePath = Path.GetRelativePath(contentRoot, contentFile);
-            string placeholderPath = Path.Combine(syncRootPath, relativePath);
-            string? parentPath = Path.GetDirectoryName(placeholderPath);
-            if (parentPath is not null)
-            {
-                Directory.CreateDirectory(parentPath);
-            }
-
-            if (!File.Exists(placeholderPath))
-            {
-                FileInfo contentInfo = new(contentFile);
-                syncRoot.CreateFilePlaceholder(
-                    relativePath,
-                    contentInfo.Length,
-                    Encoding.UTF8.GetBytes(relativePath));
-                created++;
-            }
-
-            byte[] expected = await File.ReadAllBytesAsync(contentFile);
-            byte[] actual = await File.ReadAllBytesAsync(placeholderPath);
-            if (!expected.AsSpan().SequenceEqual(actual))
-            {
-                throw new InvalidDataException(
-                    $"Hydrated content does not match the source file: {relativePath}");
-            }
-
-            verified++;
+            string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
+            FileInfo sourceInfo = new(Path.Combine(contentRoot, relativePath));
+            long offset = sourceInfo.Length == 0 ? 0 : sourceInfo.Length / 2;
+            int length = (int)Math.Min(1024, sourceInfo.Length - offset);
+            randomReads.Add(ReadRangeAsync(placeholderFile, offset, length));
         }
 
+        byte[][] ranges = await Task.WhenAll(randomReads);
+
         Console.WriteLine($"Sync root: {syncRoot.Path}");
-        Console.WriteLine($"Created placeholders: {created}");
-        Console.WriteLine($"Verified hydrated files: {verified}");
+        Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
+        Console.WriteLine($"Concurrent random ranges hydrated: {ranges.Length}");
         Console.WriteLine("The registration remains installed; call CloudSyncRoot.Unregister only when removing it.");
         return 0;
     }
 
-    private sealed class LocalFolderContentProvider : ICloudFileContentProvider
+    private static async Task<byte[]> ReadRangeAsync(string path, long offset, int length)
+    {
+        await using FileStream stream = new(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            bufferSize: 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        stream.Position = offset;
+        byte[] buffer = new byte[length];
+        int read = await stream.ReadAsync(buffer);
+        return buffer[..read];
+    }
+
+    private sealed class LocalFolderContentProvider : ICloudDemandProvider
     {
         private readonly string _rootPath;
         private readonly string _rootPrefix;
+        private readonly string _syncRootPath;
 
-        internal LocalFolderContentProvider(string rootPath)
+        internal LocalFolderContentProvider(string rootPath, string syncRootPath)
         {
             _rootPath = Path.GetFullPath(rootPath);
             _rootPrefix = _rootPath + Path.DirectorySeparatorChar;
+            _syncRootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(syncRootPath));
         }
 
         public ValueTask<Stream> OpenReadAsync(
@@ -105,7 +105,10 @@ internal static class SampleProvider
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string relativePath = Encoding.UTF8.GetString(request.FileIdentity);
+            string remotePath = CloudPlaceholderIdentity
+                .Decode(request.FileIdentity)
+                .RemoteId;
+            string relativePath = Path.GetRelativePath(_rootPath, remotePath);
             string contentPath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
             if (!contentPath.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
             {
@@ -120,6 +123,97 @@ internal static class SampleProvider
                 bufferSize: 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             return ValueTask.FromResult(stream);
+        }
+
+        public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(
+            CloudProviderFetchPlaceholdersRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string sourceDirectory = ResolveSourcePath(request.NormalizedPath);
+            string pattern = string.IsNullOrWhiteSpace(request.SearchPattern)
+                ? "*"
+                : request.SearchPattern;
+            string[] entries = Directory
+                .EnumerateFileSystemEntries(sourceDirectory, pattern, SearchOption.TopDirectoryOnly)
+                .OrderBy(static path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
+                .ToArray();
+            int offset = ParseContinuation(request.ContinuationToken, entries.Length);
+            const int pageSize = 128;
+            CloudPlaceholderSpec[] children = entries
+                .Skip(offset)
+                .Take(pageSize)
+                .Select(CreatePlaceholder)
+                .ToArray();
+            int nextOffset = offset + children.Length;
+            string? continuation = nextOffset < entries.Length
+                ? nextOffset.ToString(CultureInfo.InvariantCulture)
+                : null;
+            return ValueTask.FromResult(new CloudProviderDirectoryPage(
+                children,
+                continuation,
+                entries.Length));
+        }
+
+        private string ResolveSourcePath(string normalizedPath)
+        {
+            string relativePath = normalizedPath;
+            if (Path.IsPathRooted(relativePath) &&
+                relativePath.StartsWith(_syncRootPath, StringComparison.OrdinalIgnoreCase))
+            {
+                relativePath = Path.GetRelativePath(_syncRootPath, relativePath);
+            }
+
+            relativePath = relativePath.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string sourcePath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
+            if (!sourcePath.Equals(_rootPath, StringComparison.OrdinalIgnoreCase) &&
+                !sourcePath.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("The directory callback escapes the content directory.");
+            }
+
+            return sourcePath;
+        }
+
+        private static int ParseContinuation(string? token, int count)
+        {
+            if (token is null)
+            {
+                return 0;
+            }
+
+            if (!int.TryParse(token, out int offset) || offset < 0 || offset > count)
+            {
+                throw new InvalidDataException("The directory continuation token is invalid.");
+            }
+
+            return offset;
+        }
+
+        private static CloudPlaceholderSpec CreatePlaceholder(string path)
+        {
+            string name = Path.GetFileName(path);
+            string remoteId = path;
+            CloudPlaceholderIdentity identity = new(CreateStableItemId(remoteId), remoteId);
+            if (Directory.Exists(path))
+            {
+                return CloudDirectoryPlaceholderSpec.CreateBuilder(name, identity)
+                    .WithPopulationState(CloudDirectoryPopulationState.Partial)
+                    .Build();
+            }
+
+            long length = new FileInfo(path).Length;
+            return CloudFilePlaceholderSpec.CreateBuilder(name, identity, length)
+                .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly)
+                .Build();
+        }
+
+        private static Guid CreateStableItemId(string remoteId)
+        {
+            Span<byte> digest = stackalloc byte[32];
+            SHA256.HashData(Encoding.UTF8.GetBytes(remoteId), digest);
+            return new Guid(digest[..16], bigEndian: true);
         }
     }
 }

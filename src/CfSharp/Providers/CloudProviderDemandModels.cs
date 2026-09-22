@@ -97,6 +97,9 @@ public sealed class CloudProviderFetchPlaceholdersRequest
 
     /// <summary>Gets the last continuation token committed for this directory, when any.</summary>
     public string? ContinuationToken { get; }
+
+    internal CloudProviderFetchPlaceholdersRequest WithContinuationToken(string? continuationToken) =>
+        new(NormalizedPath, _directoryIdentity, SearchPattern, continuationToken);
 }
 
 /// <summary>Contains an immutable page of child placeholder specifications.</summary>
@@ -128,6 +131,25 @@ public sealed class CloudProviderDirectoryPage
         if (totalCount is < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(totalCount), totalCount, "Total count cannot be negative.");
+        }
+
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<Guid> identities = [];
+        foreach (CloudPlaceholderSpec child in copy)
+        {
+            if (!names.Add(child.Name))
+            {
+                throw new ArgumentException(
+                    $"A directory page cannot contain duplicate child name '{child.Name}'.",
+                    nameof(children));
+            }
+
+            if (!identities.Add(child.Identity.ItemId))
+            {
+                throw new ArgumentException(
+                    $"A directory page cannot contain duplicate item identity '{child.Identity.ItemId}'.",
+                    nameof(children));
+            }
         }
 
         _children = Array.AsReadOnly(copy);

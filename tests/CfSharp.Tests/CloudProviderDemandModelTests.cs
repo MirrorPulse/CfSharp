@@ -29,6 +29,28 @@ public sealed class CloudProviderDemandModelTests
     }
 
     [Fact]
+    public void DirectoryPageRejectsDuplicateNamesAndIdentities()
+    {
+        CloudFilePlaceholderSpec first = CloudFilePlaceholderSpec.CreateBuilder(
+            "first.txt",
+            new CloudPlaceholderIdentity(Guid.NewGuid(), "remote-first"),
+            3).Build();
+        CloudFilePlaceholderSpec duplicateName = CloudFilePlaceholderSpec.CreateBuilder(
+            "FIRST.TXT",
+            new CloudPlaceholderIdentity(Guid.NewGuid(), "remote-second"),
+            3).Build();
+        Assert.Throws<ArgumentException>(() =>
+            new CloudProviderDirectoryPage([first, duplicateName]));
+
+        CloudFilePlaceholderSpec duplicateIdentity = CloudFilePlaceholderSpec.CreateBuilder(
+            "second.txt",
+            first.Identity,
+            3).Build();
+        Assert.Throws<ArgumentException>(() =>
+            new CloudProviderDirectoryPage([first, duplicateIdentity]));
+    }
+
+    [Fact]
     public void ValidationResultFactoriesPreserveOutcome()
     {
         Assert.Equal(

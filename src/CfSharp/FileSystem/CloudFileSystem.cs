@@ -217,7 +217,8 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                 openedRuntimeSession = _runtime.Start(
                     SyncRootPath,
                     _registration,
-                    _contentProvider);
+                    _contentProvider,
+                    openedStore);
                 if (openedRuntimeSession is null)
                 {
                     throw new InvalidOperationException(

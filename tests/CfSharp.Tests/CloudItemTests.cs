@@ -466,7 +466,8 @@ public sealed class CloudItemTests
         public ICloudFileSystemRuntimeSession Start(
             string syncRootPath,
             SyncRootRegistrationOptions? registration,
-            ICloudFileContentProvider? contentProvider) =>
+            ICloudFileContentProvider? contentProvider,
+            ICloudStateStore stateStore) =>
             new StubRuntimeSession();
     }
 

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text;
 
 using CfSharp.Native;
 
@@ -29,11 +30,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private readonly ICloudFileContentProvider _contentProvider;
     private readonly CloudProviderSessionOptions _options;
+    private readonly ICloudStateStore? _stateStore;
+    private readonly string _syncRootPath;
     private readonly object _lifecycleGate = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
     private readonly ConcurrentDictionary<long, CallbackRequest> _callbackRequests = new();
     private readonly ConcurrentDictionary<string, string> _directoryContinuations = new(
+        StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _directoryPopulationGates = new(
         StringComparer.OrdinalIgnoreCase);
     private CloudProviderDispatcher? _dispatcher;
     private unsafe CfCallbackRegistration* _callbackTable;
@@ -44,10 +49,14 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private CloudProviderSession(
         ICloudFileContentProvider contentProvider,
-        CloudProviderSessionOptions options)
+        CloudProviderSessionOptions options,
+        ICloudStateStore? stateStore,
+        string syncRootPath)
     {
         _contentProvider = contentProvider;
         _options = options;
+        _stateStore = stateStore;
+        _syncRootPath = syncRootPath;
     }
 
     /// <summary>Connects a content provider to a persistently registered sync root.</summary>
@@ -79,7 +88,24 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
 
-        CloudProviderSession session = new(contentProvider, options);
+        CloudProviderSession session = new(contentProvider, options, null, syncRoot.Path);
+        session.ConnectCore(syncRoot.Path);
+        return session;
+    }
+
+    internal static CloudProviderSession Connect(
+        CloudSyncRoot syncRoot,
+        ICloudFileContentProvider contentProvider,
+        ICloudStateStore stateStore)
+    {
+        ArgumentNullException.ThrowIfNull(syncRoot);
+        ArgumentNullException.ThrowIfNull(contentProvider);
+        ArgumentNullException.ThrowIfNull(stateStore);
+        CloudProviderSession session = new(
+            contentProvider,
+            CloudProviderSessionOptions.Default,
+            stateStore,
+            syncRoot.Path);
         session.ConnectCore(syncRoot.Path);
         return session;
     }
@@ -152,6 +178,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             (nuint)sizeof(CfCallbackRegistration));
         if (_callbackTable is null)
         {
+            _dispatcher.DisposeAsync(_options.ShutdownTimeout).AsTask().GetAwaiter().GetResult();
+            _dispatcher = null;
             throw new InvalidOperationException(
                 "Unable to allocate the Cloud Files callback table.");
         }
@@ -242,6 +270,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         if (result < 0)
         {
             ReleaseNativeState();
+            _dispatcher.DisposeAsync(_options.ShutdownTimeout).AsTask().GetAwaiter().GetResult();
+            _dispatcher = null;
             ThrowIfFailed("CloudProviderSession.Connect", result);
         }
     }
@@ -467,6 +497,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private async Task ProcessPlaceholdersAsync(PlaceholderRequest activeRequest)
     {
+        SemaphoreSlim? populationGate = null;
+        bool gateEntered = false;
         try
         {
             if (_contentProvider is not ICloudDemandProvider demandProvider)
@@ -474,17 +506,29 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 throw new NotSupportedException("The provider does not support directory population.");
             }
 
+            CloudProviderFetchPlaceholdersRequest request =
+                await LoadContinuationAsync(activeRequest.Request).ConfigureAwait(false);
+            activeRequest.Request = request;
+            populationGate = _directoryPopulationGates.GetOrAdd(
+                request.NormalizedPath,
+                static _ => new SemaphoreSlim(1, 1));
+            await populationGate.WaitAsync(activeRequest.Cancellation.Token).ConfigureAwait(false);
+            gateEntered = true;
+            request = await LoadContinuationAsync(request).ConfigureAwait(false);
+            activeRequest.Request = request;
             CloudProviderDirectoryPage page = await demandProvider
-                .FetchChildrenAsync(activeRequest.Request, activeRequest.Cancellation.Token)
+                .FetchChildrenAsync(request, activeRequest.Cancellation.Token)
                 .ConfigureAwait(false);
+            ValidateDirectoryPage(request, page);
             SendPlaceholders(activeRequest, page);
+            await PersistDirectoryPageAsync(request, page).ConfigureAwait(false);
             if (page.ContinuationToken is null)
             {
-                _directoryContinuations.TryRemove(activeRequest.Request.NormalizedPath, out _);
+                _directoryContinuations.TryRemove(request.NormalizedPath, out _);
             }
             else
             {
-                _directoryContinuations[activeRequest.Request.NormalizedPath] = page.ContinuationToken;
+                _directoryContinuations[request.NormalizedPath] = page.ContinuationToken;
             }
         }
         catch (OperationCanceledException)
@@ -497,9 +541,168 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
         finally
         {
+            if (gateEntered)
+            {
+                populationGate!.Release();
+                _directoryPopulationGates.TryRemove(
+                    new KeyValuePair<string, SemaphoreSlim>(
+                        activeRequest.Request.NormalizedPath,
+                        populationGate));
+            }
+
             RemovePlaceholderRequest(activeRequest);
         }
     }
+
+    private static void ValidateDirectoryPage(
+        CloudProviderFetchPlaceholdersRequest request,
+        CloudProviderDirectoryPage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (page.ContinuationToken is not null &&
+            string.Equals(page.ContinuationToken, request.ContinuationToken, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The provider returned the same directory continuation token twice.");
+        }
+
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<Guid> identities = [];
+        foreach (CloudPlaceholderSpec child in page.Children)
+        {
+            if (!names.Add(child.Name))
+            {
+                throw new InvalidDataException(
+                    $"The provider returned duplicate child name '{child.Name}'.");
+            }
+
+            if (!identities.Add(child.Identity.ItemId))
+            {
+                throw new InvalidDataException(
+                    $"The provider returned duplicate item identity '{child.Identity.ItemId}'.");
+            }
+        }
+    }
+
+    private async ValueTask<CloudProviderFetchPlaceholdersRequest> LoadContinuationAsync(
+        CloudProviderFetchPlaceholdersRequest request)
+    {
+        if (_directoryContinuations.TryGetValue(
+            request.NormalizedPath,
+            out string? inMemoryContinuation))
+        {
+            return request.WithContinuationToken(inMemoryContinuation);
+        }
+
+        if (_stateStore is null)
+        {
+            return request;
+        }
+
+        await using ICloudStateTransaction transaction = await _stateStore
+            .BeginTransactionAsync(_shutdown.Token)
+            .ConfigureAwait(false);
+        CloudStateCheckpoint? checkpoint = await transaction.Checkpoints
+            .GetAsync(GetDirectoryCheckpointName(request.NormalizedPath), _shutdown.Token)
+            .ConfigureAwait(false);
+        if (checkpoint is null)
+        {
+            return request;
+        }
+
+        string continuation = Encoding.UTF8.GetString(checkpoint.Value.Span);
+        if (string.IsNullOrWhiteSpace(continuation))
+        {
+            throw new InvalidDataException("The durable directory continuation is empty.");
+        }
+
+        _directoryContinuations[request.NormalizedPath] = continuation;
+        return request.WithContinuationToken(continuation);
+    }
+
+    private async ValueTask PersistDirectoryPageAsync(
+        CloudProviderFetchPlaceholdersRequest request,
+        CloudProviderDirectoryPage page)
+    {
+        if (_stateStore is null)
+        {
+            return;
+        }
+
+        string? directoryPath = ResolveCallbackPath(request.NormalizedPath);
+        if (directoryPath is null)
+        {
+            return;
+        }
+
+        string relativeDirectory = Path.GetRelativePath(_syncRootPath, directoryPath);
+        if (relativeDirectory == ".")
+        {
+            relativeDirectory = string.Empty;
+        }
+
+        await using ICloudStateTransaction transaction = await _stateStore
+            .BeginTransactionAsync(_shutdown.Token)
+            .ConfigureAwait(false);
+        DateTimeOffset updatedAt = DateTimeOffset.UtcNow;
+        foreach (CloudPlaceholderSpec child in page.Children)
+        {
+            string relativePath = relativeDirectory.Length == 0
+                ? child.Name
+                : Path.Combine(relativeDirectory, child.Name);
+            await transaction.Items.UpsertAsync(
+                new CloudItemState(
+                    child.Identity.ItemId,
+                    child.Identity.RemoteId,
+                    relativePath,
+                    child.Kind,
+                    child.Identity.RemoteRevision,
+                    localFileId: null,
+                    isTombstone: false,
+                    updatedAt),
+                _shutdown.Token).ConfigureAwait(false);
+        }
+
+        string checkpointName = GetDirectoryCheckpointName(request.NormalizedPath);
+        if (page.ContinuationToken is null)
+        {
+            await transaction.Checkpoints.RemoveAsync(checkpointName, _shutdown.Token)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            await transaction.Checkpoints.UpsertAsync(
+                new CloudStateCheckpoint(
+                    checkpointName,
+                    Encoding.UTF8.GetBytes(page.ContinuationToken),
+                    updatedAt),
+                _shutdown.Token).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(_shutdown.Token).ConfigureAwait(false);
+    }
+
+    private string? ResolveCallbackPath(string normalizedPath)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return null;
+        }
+
+        string rootPrefix = _syncRootPath + Path.DirectorySeparatorChar;
+        string candidate = normalizedPath.StartsWith(Path.DirectorySeparatorChar)
+            ? Path.GetFullPath(Path.Combine(
+                Path.GetPathRoot(_syncRootPath) ?? _syncRootPath,
+                normalizedPath.TrimStart(Path.DirectorySeparatorChar)))
+            : Path.GetFullPath(normalizedPath);
+        return candidate.Equals(_syncRootPath, StringComparison.OrdinalIgnoreCase) ||
+            candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+            ? candidate
+            : null;
+    }
+
+    private static string GetDirectoryCheckpointName(string normalizedPath) =>
+        "cfsharp.directory." + normalizedPath;
 
     private unsafe void DispatchValidateData(
         CfCallbackInfo* callbackInfo,
@@ -1669,7 +1872,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Request = request;
         }
 
-        internal CloudProviderFetchPlaceholdersRequest Request { get; }
+        internal CloudProviderFetchPlaceholdersRequest Request { get; set; }
     }
 
     private sealed class ValidationRequest : CallbackRequest

@@ -7,7 +7,8 @@ internal interface ICloudFileSystemRuntime
     ICloudFileSystemRuntimeSession Start(
         string syncRootPath,
         SyncRootRegistrationOptions? registration,
-        ICloudFileContentProvider? contentProvider);
+        ICloudFileContentProvider? contentProvider,
+        ICloudStateStore stateStore);
 }
 
 internal interface ICloudFileSystemRuntimeSession : IAsyncDisposable
@@ -26,14 +27,15 @@ internal sealed class WindowsCloudFileSystemRuntime : ICloudFileSystemRuntime
     public ICloudFileSystemRuntimeSession Start(
         string syncRootPath,
         SyncRootRegistrationOptions? registration,
-        ICloudFileContentProvider? contentProvider)
+        ICloudFileContentProvider? contentProvider,
+        ICloudStateStore stateStore)
     {
         CloudSyncRoot syncRoot = registration is null
             ? CloudSyncRoot.Open(syncRootPath)
             : CloudSyncRoot.Register(syncRootPath, registration);
         CloudProviderSession? providerSession = contentProvider is null
             ? null
-            : CloudProviderSession.Connect(syncRoot, contentProvider);
+            : CloudProviderSession.Connect(syncRoot, contentProvider, stateStore);
         return new WindowsCloudFileSystemRuntimeSession(providerSession);
     }
 

@@ -398,7 +398,8 @@ public sealed class CloudFileSystemTests
         public ICloudFileSystemRuntimeSession Start(
             string syncRootPath,
             SyncRootRegistrationOptions? registration,
-            ICloudFileContentProvider? contentProvider)
+            ICloudFileContentProvider? contentProvider,
+            ICloudStateStore stateStore)
         {
             StartCalls++;
             SyncRootPath = syncRootPath;

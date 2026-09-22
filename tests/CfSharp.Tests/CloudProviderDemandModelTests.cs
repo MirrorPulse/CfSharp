@@ -41,4 +41,19 @@ public sealed class CloudProviderDemandModelTests
             CloudProviderValidationStatus.Changed,
             CloudProviderValidationResult.Changed().Status);
     }
+
+    [Fact]
+    public void ProgressReporterDropsRegressionsAndAlwaysForwardsTerminalProgress()
+    {
+        List<(long Completed, long Total)> reports = [];
+        CloudProviderProgressReporter reporter = new(
+            (completed, total) => reports.Add((completed, total)));
+
+        reporter.Report(1, 10);
+        reporter.Report(0, 10);
+        reporter.Report(10, 10);
+
+        Assert.Equal([(1L, 10L), (10L, 10L)], reports);
+        Assert.Throws<ArgumentOutOfRangeException>(() => reporter.Report(11, 10));
+    }
 }

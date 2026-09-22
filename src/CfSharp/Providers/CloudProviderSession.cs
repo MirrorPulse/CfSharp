@@ -25,14 +25,14 @@ namespace CfSharp;
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 {
-    private const int CallbackRegistrationCount = 5;
+    private const int CallbackRegistrationCount = 14;
 
     private readonly ICloudFileContentProvider _contentProvider;
     private readonly CloudProviderSessionOptions _options;
     private readonly object _lifecycleGate = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
-    private readonly ConcurrentDictionary<long, PlaceholderRequest> _placeholderRequests = new();
+    private readonly ConcurrentDictionary<long, CallbackRequest> _callbackRequests = new();
     private readonly ConcurrentDictionary<string, string> _directoryContinuations = new(
         StringComparer.OrdinalIgnoreCase);
     private CloudProviderDispatcher? _dispatcher;
@@ -121,7 +121,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 request.Cancel();
             }
 
-            foreach (PlaceholderRequest request in _placeholderRequests.Values)
+            foreach (CallbackRequest request in _callbackRequests.Values)
             {
                 request.Cancel();
             }
@@ -177,6 +177,51 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Callback = &CancelFetchPlaceholdersCallback,
         };
         _callbackTable[4] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.ValidateData,
+            Callback = &ValidateDataCallback,
+        };
+        _callbackTable[5] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyFileOpenCompletion,
+            Callback = &NotifyFileOpenCompletionCallback,
+        };
+        _callbackTable[6] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyFileCloseCompletion,
+            Callback = &NotifyFileCloseCompletionCallback,
+        };
+        _callbackTable[7] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyDehydrate,
+            Callback = &NotifyDehydrateCallback,
+        };
+        _callbackTable[8] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyDehydrateCompletion,
+            Callback = &NotifyDehydrateCompletionCallback,
+        };
+        _callbackTable[9] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyDelete,
+            Callback = &NotifyDeleteCallback,
+        };
+        _callbackTable[10] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyDeleteCompletion,
+            Callback = &NotifyDeleteCompletionCallback,
+        };
+        _callbackTable[11] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyRename,
+            Callback = &NotifyRenameCallback,
+        };
+        _callbackTable[12] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.NotifyRenameCompletion,
+            Callback = &NotifyRenameCompletionCallback,
+        };
+        _callbackTable[13] = new CfCallbackRegistration
         {
             Type = CfCallbackType.None,
             Callback = null,
@@ -234,22 +279,36 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         string path = callbackInfo->NormalizedPath is null
             ? string.Empty
             : new string(callbackInfo->NormalizedPath);
+        CfConnectionKey connectionKey = callbackInfo->ConnectionKey;
+        CfTransferKey transferKey = callbackInfo->TransferKey;
+        CfRequestKey requestKey = callbackInfo->RequestKey;
+        long fileSize = callbackInfo->FileSize;
         CloudFileFetchRequest request = new(
             path,
             identity,
-            callbackInfo->FileSize,
+            fileSize,
             nativeRequest.RequiredFileOffset,
-            nativeRequest.RequiredLength);
+            nativeRequest.RequiredLength,
+            new CloudProviderProgressReporter((completed, total) =>
+                ReportProgress(connectionKey, transferKey, requestKey, completed, total)),
+            (replacement, markInSync) => RestartHydrationAsync(
+                connectionKey,
+                transferKey,
+                requestKey,
+                nativeRequest.RequiredFileOffset,
+                nativeRequest.RequiredLength,
+                replacement,
+                markInSync));
         CancellationTokenSource cancellation =
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         ActiveRequest activeRequest = new(
-            callbackInfo->ConnectionKey,
-            callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            connectionKey,
+            transferKey,
+            requestKey,
             request,
             cancellation);
 
-        long requestKey = callbackInfo->RequestKey.Internal;
+        long requestKeyValue = requestKey.Internal;
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -258,7 +317,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_requests.TryAdd(requestKey, activeRequest))
+            if (!_requests.TryAdd(requestKeyValue, activeRequest))
             {
                 CompleteRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -387,7 +446,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_placeholderRequests.TryAdd(requestKey, activeRequest))
+            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
             {
                 CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -442,6 +501,323 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
     }
 
+    private unsafe void DispatchValidateData(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* parameters)
+    {
+        int identityLength = checked((int)callbackInfo->FileIdentityLength);
+        byte[] identity = identityLength == 0
+            ? []
+            : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, identityLength).ToArray();
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        CfCallbackValidateDataParameters nativeRequest = parameters->ValidateData;
+        CloudProviderValidateDataRequest request = new(
+            path,
+            identity,
+            callbackInfo->FileSize,
+            nativeRequest.RequiredFileOffset,
+            nativeRequest.RequiredLength,
+            nativeRequest.Flags.HasFlag(CfCallbackValidateDataFlags.ExplicitHydration));
+        CancellationTokenSource cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        ValidationRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            request,
+            cancellation);
+        long requestKey = callbackInfo->RequestKey.Internal;
+        lock (_lifecycleGate)
+        {
+            if (Volatile.Read(ref _stopping) != 0)
+            {
+                CompleteValidationRequest(activeRequest, NtStatus.CloudFileRequestAborted);
+                return;
+            }
+
+            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            {
+                CompleteValidationRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+                return;
+            }
+
+            CloudProviderWorkItem workItem = new(
+                CloudProviderRequestKind.ValidateData,
+                cancellation,
+                _ => new ValueTask(ProcessValidationAsync(activeRequest)),
+                () => CompleteValidationRequest(activeRequest, NtStatus.CloudFileRequestAborted),
+                _ => CompleteValidationRequest(activeRequest, NtStatus.CloudFileUnsuccessful));
+            if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
+            {
+                CompleteValidationRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+            }
+        }
+    }
+
+    private async Task ProcessValidationAsync(ValidationRequest activeRequest)
+    {
+        try
+        {
+            if (_contentProvider is not ICloudDemandProvider demandProvider)
+            {
+                throw new NotSupportedException("The provider does not support data validation.");
+            }
+
+            CloudProviderValidationResult result = await demandProvider
+                .ValidateDataAsync(activeRequest.Request, activeRequest.Cancellation.Token)
+                .ConfigureAwait(false);
+            NtStatus status = result.Status is CloudProviderValidationStatus.Accepted
+                ? NtStatus.Success
+                : NtStatus.CloudFileUnsuccessful;
+            SendAckData(activeRequest, status);
+        }
+        catch (OperationCanceledException)
+        {
+            SendAckData(activeRequest, NtStatus.CloudFileRequestCanceled);
+        }
+        catch (Exception)
+        {
+            SendAckData(activeRequest, NtStatus.CloudFileUnsuccessful);
+        }
+        finally
+        {
+            RemoveCallbackRequest(activeRequest);
+        }
+    }
+
+    private unsafe void DispatchDehydrate(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* parameters)
+    {
+        if (_contentProvider is not ICloudDemandProvider demandProvider)
+        {
+            SendPolicyFailure(callbackInfo, CfOperationType.AckDehydrate);
+            return;
+        }
+
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        byte[] identity = CopyIdentity(callbackInfo);
+        CfCallbackDehydrateParameters nativeRequest = parameters->Dehydrate;
+        CloudProviderDehydrateRequest request = new(
+            path,
+            identity,
+            nativeRequest.Flags.HasFlag(CfCallbackDehydrateFlags.Background),
+            (CloudProviderDehydrationReason)nativeRequest.Reason);
+        PolicyRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            CfOperationType.AckDehydrate,
+            CloudProviderRequestKind.Dehydrate,
+            request,
+            cancellationToken => demandProvider.ApproveDehydrateAsync(request, cancellationToken),
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
+        EnqueuePolicyRequest(activeRequest);
+    }
+
+    private unsafe void DispatchDelete(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* parameters)
+    {
+        if (_contentProvider is not ICloudDemandProvider demandProvider)
+        {
+            SendPolicyFailure(callbackInfo, CfOperationType.AckDelete);
+            return;
+        }
+
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        CfCallbackDeleteParameters nativeRequest = parameters->Delete;
+        CloudProviderDeleteRequest request = new(
+            path,
+            CopyIdentity(callbackInfo),
+            nativeRequest.Flags.HasFlag(CfCallbackDeleteFlags.IsDirectory),
+            nativeRequest.Flags.HasFlag(CfCallbackDeleteFlags.IsUndelete));
+        PolicyRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            CfOperationType.AckDelete,
+            CloudProviderRequestKind.Delete,
+            request,
+            cancellationToken => demandProvider.ApproveDeleteAsync(request, cancellationToken),
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
+        EnqueuePolicyRequest(activeRequest);
+    }
+
+    private unsafe void DispatchRename(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* parameters)
+    {
+        if (_contentProvider is not ICloudDemandProvider demandProvider)
+        {
+            SendPolicyFailure(callbackInfo, CfOperationType.AckRename);
+            return;
+        }
+
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        CfCallbackRenameParameters nativeRequest = parameters->Rename;
+        string targetPath = nativeRequest.TargetPath is null
+            ? string.Empty
+            : new string(nativeRequest.TargetPath);
+        CloudProviderRenameRequest request = new(
+            path,
+            CopyIdentity(callbackInfo),
+            targetPath,
+            nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.IsDirectory),
+            nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.SourceInScope),
+            nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.TargetInScope));
+        PolicyRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            CfOperationType.AckRename,
+            CloudProviderRequestKind.Rename,
+            request,
+            cancellationToken => demandProvider.ApproveRenameAsync(request, cancellationToken),
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
+        EnqueuePolicyRequest(activeRequest);
+    }
+
+    private void EnqueuePolicyRequest(PolicyRequest activeRequest)
+    {
+        long requestKey = activeRequest.RequestKey.Internal;
+        lock (_lifecycleGate)
+        {
+            if (Volatile.Read(ref _stopping) != 0)
+            {
+                CompletePolicyRequest(activeRequest, NtStatus.CloudFileRequestAborted);
+                return;
+            }
+
+            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            {
+                CompletePolicyRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+                return;
+            }
+
+            CloudProviderWorkItem workItem = new(
+                activeRequest.Kind,
+                activeRequest.Cancellation,
+                _ => new ValueTask(ProcessPolicyAsync(activeRequest)),
+                () => CompletePolicyRequest(activeRequest, NtStatus.CloudFileRequestAborted),
+                _ => CompletePolicyRequest(activeRequest, NtStatus.CloudFileUnsuccessful));
+            if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
+            {
+                CompletePolicyRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+            }
+        }
+    }
+
+    private async Task ProcessPolicyAsync(PolicyRequest activeRequest)
+    {
+        try
+        {
+            CloudProviderPolicyDecision decision = await activeRequest.Handler(
+                activeRequest.Cancellation.Token).ConfigureAwait(false);
+            SendPolicyResult(
+                activeRequest,
+                decision is CloudProviderPolicyDecision.Allow
+                    ? NtStatus.Success
+                    : NtStatus.CloudFileUnsuccessful);
+        }
+        catch (OperationCanceledException)
+        {
+            SendPolicyResult(activeRequest, NtStatus.CloudFileRequestCanceled);
+        }
+        catch (Exception)
+        {
+            SendPolicyResult(activeRequest, NtStatus.CloudFileUnsuccessful);
+        }
+        finally
+        {
+            RemoveCallbackRequest(activeRequest);
+        }
+    }
+
+    private static unsafe byte[] CopyIdentity(CfCallbackInfo* callbackInfo)
+    {
+        int length = checked((int)callbackInfo->FileIdentityLength);
+        return length == 0
+            ? []
+            : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, length).ToArray();
+    }
+
+    private unsafe void DispatchCompletion(
+        CfCallbackInfo* callbackInfo,
+        CloudProviderCompletionNotification notification)
+    {
+        if (_contentProvider is not ICloudDemandProvider demandProvider)
+        {
+            return;
+        }
+
+        NotificationRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            notification,
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token));
+        long requestKey = callbackInfo->RequestKey.Internal;
+        lock (_lifecycleGate)
+        {
+            if (Volatile.Read(ref _stopping) != 0)
+            {
+                activeRequest.Cancel();
+                activeRequest.DisposeCancellation();
+                return;
+            }
+
+            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            {
+                activeRequest.DisposeCancellation();
+                return;
+            }
+
+            CloudProviderWorkItem workItem = new(
+                CloudProviderRequestKind.CompletionNotification,
+                activeRequest.Cancellation,
+                _ => new ValueTask(ProcessCompletionAsync(activeRequest, demandProvider)),
+                () => RemoveCallbackRequest(activeRequest),
+                _ => RemoveCallbackRequest(activeRequest));
+            if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
+            {
+                RemoveCallbackRequest(activeRequest);
+            }
+        }
+    }
+
+    private async Task ProcessCompletionAsync(
+        NotificationRequest activeRequest,
+        ICloudDemandProvider demandProvider)
+    {
+        try
+        {
+            await demandProvider.OnCompletionAsync(
+                activeRequest.Notification,
+                activeRequest.Cancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Notification delivery is best effort; cancellation is observed during shutdown.
+        }
+        catch (Exception)
+        {
+            // Notification failures must not affect the completed native operation.
+        }
+        finally
+        {
+            RemoveCallbackRequest(activeRequest);
+        }
+    }
+
     private static async ValueTask<int> ReadExactlyAsync(
         Stream source,
         Memory<byte> destination,
@@ -483,6 +859,75 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             int result = CfApi.CfExecute(&operationInfo, &parameters);
             ThrowIfFailed("CloudProviderSession.TransferData", result);
         }
+    }
+
+    private static void ReportProgress(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        CfRequestKey requestKey,
+        long completed,
+        long total)
+    {
+        _ = requestKey;
+        _ = CfApi.CfReportProviderProgress(
+            connectionKey,
+            transferKey,
+            total,
+            completed);
+    }
+
+    private static unsafe ValueTask RestartHydrationAsync(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        CfRequestKey requestKey,
+        long requiredOffset,
+        long requiredLength,
+        CloudPlaceholderSpec replacement,
+        bool markInSync)
+    {
+        if (replacement is not CloudFilePlaceholderSpec replacementFile)
+        {
+            return ValueTask.FromException(new ArgumentException(
+                "Hydration restart requires a file placeholder specification.",
+                nameof(replacement)));
+        }
+
+        if (replacementFile.Length < requiredOffset ||
+            requiredLength > replacementFile.Length - requiredOffset)
+        {
+            return ValueTask.FromException(new ArgumentOutOfRangeException(
+                nameof(replacement),
+                "The replacement file is smaller than the active hydration range."));
+        }
+
+        byte[] identity = replacement.Identity.Encode();
+        CfFsMetadata metadata = CloudPlaceholderPlatform.CreateMetadata(replacement);
+        CfOperationInfo operationInfo = new()
+        {
+            StructSize = (uint)sizeof(CfOperationInfo),
+            Type = CfOperationType.RestartHydration,
+            ConnectionKey = connectionKey,
+            TransferKey = transferKey,
+            RequestKey = requestKey,
+        };
+        fixed (byte* identityPointer = identity)
+        {
+            CfOperationParameters parameters = default;
+            parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationRestartHydrationParameters)));
+            parameters.RestartHydration = new CfOperationRestartHydrationParameters
+            {
+                Flags = markInSync
+                    ? CfOperationRestartHydrationFlags.MarkInSync
+                    : CfOperationRestartHydrationFlags.None,
+                FsMetadata = &metadata,
+                FileIdentity = identityPointer,
+                FileIdentityLength = checked((uint)identity.Length),
+            };
+            int result = CfApi.CfExecute(&operationInfo, &parameters);
+            ThrowIfFailed("CloudProviderSession.RestartHydration", result);
+        }
+
+        return ValueTask.CompletedTask;
     }
 
     private static unsafe void SendPlaceholders(
@@ -591,6 +1036,100 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         _ = CfApi.CfExecute(&operationInfo, &parameters);
     }
 
+    private static unsafe void SendAckData(
+        ValidationRequest request,
+        NtStatus status)
+    {
+        if (!request.TryMarkTerminal())
+        {
+            return;
+        }
+
+        CfOperationInfo operationInfo = request.CreateOperationInfo(CfOperationType.AckData);
+        CfOperationParameters parameters = default;
+        parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckDataParameters)));
+        parameters.AckData = new CfOperationAckDataParameters
+        {
+            CompletionStatus = status,
+            Offset = request.Request.Range.Offset,
+            Length = request.Request.Range.Length,
+        };
+        _ = CfApi.CfExecute(&operationInfo, &parameters);
+    }
+
+    private static unsafe void SendPolicyResult(PolicyRequest request, NtStatus status)
+    {
+        if (!request.TryMarkTerminal())
+        {
+            return;
+        }
+
+        CfOperationInfo operationInfo = request.CreateOperationInfo(request.OperationType);
+        CfOperationParameters parameters = default;
+        switch (request.OperationType)
+        {
+            case CfOperationType.AckDehydrate:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckDehydrateParameters)));
+                parameters.AckDehydrate = new CfOperationAckDehydrateParameters
+                {
+                    CompletionStatus = status,
+                };
+                break;
+            case CfOperationType.AckDelete:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckDeleteParameters)));
+                parameters.AckDelete = new CfOperationAckDeleteParameters
+                {
+                    CompletionStatus = status,
+                };
+                break;
+            case CfOperationType.AckRename:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckRenameParameters)));
+                parameters.AckRename = new CfOperationAckRenameParameters
+                {
+                    CompletionStatus = status,
+                };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(request), request.OperationType, "Unsupported acknowledgement operation.");
+        }
+
+        _ = CfApi.CfExecute(&operationInfo, &parameters);
+    }
+
+    private static unsafe void SendPolicyFailure(
+        CfCallbackInfo* callbackInfo,
+        CfOperationType operationType)
+    {
+        CfOperationInfo operationInfo = new()
+        {
+            StructSize = (uint)sizeof(CfOperationInfo),
+            Type = operationType,
+            ConnectionKey = callbackInfo->ConnectionKey,
+            TransferKey = callbackInfo->TransferKey,
+            RequestKey = callbackInfo->RequestKey,
+        };
+        CfOperationParameters parameters = default;
+        switch (operationType)
+        {
+            case CfOperationType.AckDehydrate:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckDehydrateParameters)));
+                parameters.AckDehydrate.CompletionStatus = NtStatus.CloudFileUnsuccessful;
+                break;
+            case CfOperationType.AckDelete:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckDeleteParameters)));
+                parameters.AckDelete.CompletionStatus = NtStatus.CloudFileUnsuccessful;
+                break;
+            case CfOperationType.AckRename:
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationAckRenameParameters)));
+                parameters.AckRename.CompletionStatus = NtStatus.CloudFileUnsuccessful;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operationType));
+        }
+
+        _ = CfApi.CfExecute(&operationInfo, &parameters);
+    }
+
     private void CompleteRequest(ActiveRequest activeRequest, NtStatus status)
     {
         SendFailure(activeRequest, status);
@@ -613,9 +1152,24 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     }
 
     private void RemovePlaceholderRequest(PlaceholderRequest activeRequest)
+        => RemoveCallbackRequest(activeRequest);
+
+    private void CompleteValidationRequest(ValidationRequest activeRequest, NtStatus status)
     {
-        ((ICollection<KeyValuePair<long, PlaceholderRequest>>)_placeholderRequests).Remove(
-            new KeyValuePair<long, PlaceholderRequest>(
+        SendAckData(activeRequest, status);
+        RemoveCallbackRequest(activeRequest);
+    }
+
+    private void CompletePolicyRequest(PolicyRequest activeRequest, NtStatus status)
+    {
+        SendPolicyResult(activeRequest, status);
+        RemoveCallbackRequest(activeRequest);
+    }
+
+    private void RemoveCallbackRequest(CallbackRequest activeRequest)
+    {
+        ((ICollection<KeyValuePair<long, CallbackRequest>>)_callbackRequests).Remove(
+            new KeyValuePair<long, CallbackRequest>(
                 activeRequest.RequestKey.Internal,
                 activeRequest));
         activeRequest.DisposeCancellation();
@@ -628,11 +1182,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             request.Cancel();
         }
 
-        if (_placeholderRequests.TryGetValue(
+        if (_callbackRequests.TryGetValue(
             callbackInfo->RequestKey.Internal,
-            out PlaceholderRequest? placeholderRequest))
+            out CallbackRequest? callbackRequest))
         {
-            placeholderRequest.Cancel();
+            callbackRequest.Cancel();
         }
     }
 
@@ -713,6 +1267,240 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             if (callbackInfo is not null)
             {
                 GetSession(callbackInfo)?.CancelRequest(callbackInfo);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void ValidateDataCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                GetSession(callbackInfo)?.DispatchValidateData(callbackInfo, callbackParameters);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyFileOpenCompletionCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                CloudProviderSession? session = GetSession(callbackInfo);
+                if (session is not null)
+                {
+                    string path = callbackInfo->NormalizedPath is null
+                        ? string.Empty
+                        : new string(callbackInfo->NormalizedPath);
+                    session.DispatchCompletion(
+                        callbackInfo,
+                        new CloudProviderCompletionNotification(
+                            CloudProviderNotificationKind.FileOpenCompleted,
+                            path,
+                            CopyIdentity(callbackInfo),
+                            (uint)callbackParameters->OpenCompletion.Flags,
+                            relatedPath: null));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyFileCloseCompletionCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                CloudProviderSession? session = GetSession(callbackInfo);
+                if (session is not null)
+                {
+                    string path = callbackInfo->NormalizedPath is null
+                        ? string.Empty
+                        : new string(callbackInfo->NormalizedPath);
+                    session.DispatchCompletion(
+                        callbackInfo,
+                        new CloudProviderCompletionNotification(
+                            CloudProviderNotificationKind.FileCloseCompleted,
+                            path,
+                            CopyIdentity(callbackInfo),
+                            (uint)callbackParameters->CloseCompletion.Flags,
+                            relatedPath: null));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyDehydrateCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                GetSession(callbackInfo)?.DispatchDehydrate(callbackInfo, callbackParameters);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyDehydrateCompletionCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                CloudProviderSession? session = GetSession(callbackInfo);
+                if (session is not null)
+                {
+                    string path = callbackInfo->NormalizedPath is null
+                        ? string.Empty
+                        : new string(callbackInfo->NormalizedPath);
+                    session.DispatchCompletion(
+                        callbackInfo,
+                        new CloudProviderCompletionNotification(
+                            CloudProviderNotificationKind.DehydrateCompleted,
+                            path,
+                            CopyIdentity(callbackInfo),
+                            (uint)callbackParameters->DehydrateCompletion.Flags,
+                            relatedPath: null));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyDeleteCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                GetSession(callbackInfo)?.DispatchDelete(callbackInfo, callbackParameters);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyDeleteCompletionCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                CloudProviderSession? session = GetSession(callbackInfo);
+                if (session is not null)
+                {
+                    string path = callbackInfo->NormalizedPath is null
+                        ? string.Empty
+                        : new string(callbackInfo->NormalizedPath);
+                    session.DispatchCompletion(
+                        callbackInfo,
+                        new CloudProviderCompletionNotification(
+                            CloudProviderNotificationKind.DeleteCompleted,
+                            path,
+                            CopyIdentity(callbackInfo),
+                            (uint)callbackParameters->DeleteCompletion.Flags,
+                            relatedPath: null));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyRenameCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                GetSession(callbackInfo)?.DispatchRename(callbackInfo, callbackParameters);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void NotifyRenameCompletionCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                CloudProviderSession? session = GetSession(callbackInfo);
+                if (session is not null)
+                {
+                    string path = callbackInfo->NormalizedPath is null
+                        ? string.Empty
+                        : new string(callbackInfo->NormalizedPath);
+                    char* sourcePointer = callbackParameters->RenameCompletion.SourcePath;
+                    string? sourcePath = sourcePointer is null ? null : new string(sourcePointer);
+                    session.DispatchCompletion(
+                        callbackInfo,
+                        new CloudProviderCompletionNotification(
+                            CloudProviderNotificationKind.RenameCompleted,
+                            path,
+                            CopyIdentity(callbackInfo),
+                            (uint)callbackParameters->RenameCompletion.Flags,
+                            sourcePath));
+                }
             }
         }
         catch (Exception)
@@ -811,22 +1599,20 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
     }
 
-    private sealed class PlaceholderRequest
+    private abstract class CallbackRequest
     {
         private int _terminal;
         private int _cancellationDisposed;
 
-        internal PlaceholderRequest(
+        protected CallbackRequest(
             CfConnectionKey connectionKey,
             CfTransferKey transferKey,
             CfRequestKey requestKey,
-            CloudProviderFetchPlaceholdersRequest request,
             CancellationTokenSource cancellation)
         {
             ConnectionKey = connectionKey;
             TransferKey = transferKey;
             RequestKey = requestKey;
-            Request = request;
             Cancellation = cancellation;
         }
 
@@ -835,8 +1621,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         internal CfTransferKey TransferKey { get; }
 
         internal CfRequestKey RequestKey { get; }
-
-        internal CloudProviderFetchPlaceholdersRequest Request { get; }
 
         internal CancellationTokenSource Cancellation { get; }
 
@@ -870,5 +1654,81 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 Cancellation.Dispose();
             }
         }
+    }
+
+    private sealed class PlaceholderRequest : CallbackRequest
+    {
+        internal PlaceholderRequest(
+            CfConnectionKey connectionKey,
+            CfTransferKey transferKey,
+            CfRequestKey requestKey,
+            CloudProviderFetchPlaceholdersRequest request,
+            CancellationTokenSource cancellation)
+            : base(connectionKey, transferKey, requestKey, cancellation)
+        {
+            Request = request;
+        }
+
+        internal CloudProviderFetchPlaceholdersRequest Request { get; }
+    }
+
+    private sealed class ValidationRequest : CallbackRequest
+    {
+        internal ValidationRequest(
+            CfConnectionKey connectionKey,
+            CfTransferKey transferKey,
+            CfRequestKey requestKey,
+            CloudProviderValidateDataRequest request,
+            CancellationTokenSource cancellation)
+            : base(connectionKey, transferKey, requestKey, cancellation)
+        {
+            Request = request;
+        }
+
+        internal CloudProviderValidateDataRequest Request { get; }
+    }
+
+    private sealed class PolicyRequest : CallbackRequest
+    {
+        internal PolicyRequest(
+            CfConnectionKey connectionKey,
+            CfTransferKey transferKey,
+            CfRequestKey requestKey,
+            CfOperationType operationType,
+            CloudProviderRequestKind kind,
+            object request,
+            Func<CancellationToken, ValueTask<CloudProviderPolicyDecision>> handler,
+            CancellationTokenSource cancellation)
+            : base(connectionKey, transferKey, requestKey, cancellation)
+        {
+            OperationType = operationType;
+            Kind = kind;
+            Request = request;
+            Handler = handler;
+        }
+
+        internal CfOperationType OperationType { get; }
+
+        internal CloudProviderRequestKind Kind { get; }
+
+        internal object Request { get; }
+
+        internal Func<CancellationToken, ValueTask<CloudProviderPolicyDecision>> Handler { get; }
+    }
+
+    private sealed class NotificationRequest : CallbackRequest
+    {
+        internal NotificationRequest(
+            CfConnectionKey connectionKey,
+            CfTransferKey transferKey,
+            CfRequestKey requestKey,
+            CloudProviderCompletionNotification notification,
+            CancellationTokenSource cancellation)
+            : base(connectionKey, transferKey, requestKey, cancellation)
+        {
+            Notification = notification;
+        }
+
+        internal CloudProviderCompletionNotification Notification { get; }
     }
 }

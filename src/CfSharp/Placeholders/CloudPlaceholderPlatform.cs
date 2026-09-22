@@ -154,7 +154,7 @@ internal static class CloudPlaceholderPlatform
         }
     }
 
-    private static CfFsMetadata CreateMetadata(CloudPlaceholderSpec specification)
+    internal static CfFsMetadata CreateMetadata(CloudPlaceholderSpec specification)
     {
         CloudPlaceholderMetadata metadata = specification.Metadata;
         return new CfFsMetadata
@@ -171,7 +171,7 @@ internal static class CloudPlaceholderPlatform
         };
     }
 
-    private static CfPlaceholderCreateFlags CreateFlags(CloudPlaceholderSpec specification)
+    internal static CfPlaceholderCreateFlags CreateFlags(CloudPlaceholderSpec specification)
     {
         CfPlaceholderCreateFlags flags = CfPlaceholderCreateFlags.None;
         if (specification.InitiallyInSync)

@@ -25,13 +25,16 @@ namespace CfSharp;
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 {
-    private const int CallbackRegistrationCount = 3;
+    private const int CallbackRegistrationCount = 5;
 
     private readonly ICloudFileContentProvider _contentProvider;
     private readonly CloudProviderSessionOptions _options;
     private readonly object _lifecycleGate = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
+    private readonly ConcurrentDictionary<long, PlaceholderRequest> _placeholderRequests = new();
+    private readonly ConcurrentDictionary<string, string> _directoryContinuations = new(
+        StringComparer.OrdinalIgnoreCase);
     private CloudProviderDispatcher? _dispatcher;
     private unsafe CfCallbackRegistration* _callbackTable;
     private GCHandle _callbackContext;
@@ -117,6 +120,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             {
                 request.Cancel();
             }
+
+            foreach (PlaceholderRequest request in _placeholderRequests.Values)
+            {
+                request.Cancel();
+            }
         }
 
         try
@@ -159,6 +167,16 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Callback = &CancelFetchDataCallback,
         };
         _callbackTable[2] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.FetchPlaceholders,
+            Callback = &FetchPlaceholdersCallback,
+        };
+        _callbackTable[3] = new CfCallbackRegistration
+        {
+            Type = CfCallbackType.CancelFetchPlaceholders,
+            Callback = &CancelFetchPlaceholdersCallback,
+        };
+        _callbackTable[4] = new CfCallbackRegistration
         {
             Type = CfCallbackType.None,
             Callback = null,
@@ -331,6 +349,99 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
     }
 
+    private unsafe void DispatchFetchPlaceholders(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* parameters)
+    {
+        int identityLength = checked((int)callbackInfo->FileIdentityLength);
+        byte[] identity = identityLength == 0
+            ? []
+            : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, identityLength).ToArray();
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        string pattern = parameters->FetchPlaceholders.Pattern is null
+            ? string.Empty
+            : new string(parameters->FetchPlaceholders.Pattern);
+        _directoryContinuations.TryGetValue(path, out string? continuationToken);
+        CloudProviderFetchPlaceholdersRequest request = new(
+            path,
+            identity,
+            pattern,
+            continuationToken);
+        CancellationTokenSource cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        PlaceholderRequest activeRequest = new(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            callbackInfo->RequestKey,
+            request,
+            cancellation);
+
+        long requestKey = callbackInfo->RequestKey.Internal;
+        lock (_lifecycleGate)
+        {
+            if (Volatile.Read(ref _stopping) != 0)
+            {
+                CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileRequestAborted);
+                return;
+            }
+
+            if (!_placeholderRequests.TryAdd(requestKey, activeRequest))
+            {
+                CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+                return;
+            }
+
+            CloudProviderWorkItem workItem = new(
+                CloudProviderRequestKind.FetchPlaceholders,
+                cancellation,
+                _ => new ValueTask(ProcessPlaceholdersAsync(activeRequest)),
+                () => CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileRequestAborted),
+                _ => CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileUnsuccessful));
+            if (_dispatcher is null || !_dispatcher.TryEnqueue(workItem))
+            {
+                CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
+            }
+        }
+    }
+
+    private async Task ProcessPlaceholdersAsync(PlaceholderRequest activeRequest)
+    {
+        try
+        {
+            if (_contentProvider is not ICloudDemandProvider demandProvider)
+            {
+                throw new NotSupportedException("The provider does not support directory population.");
+            }
+
+            CloudProviderDirectoryPage page = await demandProvider
+                .FetchChildrenAsync(activeRequest.Request, activeRequest.Cancellation.Token)
+                .ConfigureAwait(false);
+            SendPlaceholders(activeRequest, page);
+            if (page.ContinuationToken is null)
+            {
+                _directoryContinuations.TryRemove(activeRequest.Request.NormalizedPath, out _);
+            }
+            else
+            {
+                _directoryContinuations[activeRequest.Request.NormalizedPath] = page.ContinuationToken;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            SendPlaceholderFailure(activeRequest, NtStatus.CloudFileRequestCanceled);
+        }
+        catch (Exception)
+        {
+            SendPlaceholderFailure(activeRequest, NtStatus.CloudFileUnsuccessful);
+        }
+        finally
+        {
+            RemovePlaceholderRequest(activeRequest);
+        }
+    }
+
     private static async ValueTask<int> ReadExactlyAsync(
         Stream source,
         Memory<byte> destination,
@@ -374,6 +485,69 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
     }
 
+    private static unsafe void SendPlaceholders(
+        PlaceholderRequest request,
+        CloudProviderDirectoryPage page)
+    {
+        CloudPlaceholderSpec[] specifications = page.Children.ToArray();
+        CfPlaceholderCreateInfo[] entries = new CfPlaceholderCreateInfo[specifications.Length];
+        List<GCHandle> pinned = new(specifications.Length * 2);
+        try
+        {
+            for (int index = 0; index < specifications.Length; index++)
+            {
+                CloudPlaceholderSpec specification = specifications[index];
+                char[] name = (specification.Name + '\0').ToCharArray();
+                byte[] identity = specification.Identity.Encode();
+                GCHandle nameHandle = GCHandle.Alloc(name, GCHandleType.Pinned);
+                pinned.Add(nameHandle);
+                GCHandle identityHandle = GCHandle.Alloc(identity, GCHandleType.Pinned);
+                pinned.Add(identityHandle);
+                entries[index] = new CfPlaceholderCreateInfo
+                {
+                    RelativeFileName = (char*)nameHandle.AddrOfPinnedObject(),
+                    FsMetadata = CloudPlaceholderPlatform.CreateMetadata(specification),
+                    FileIdentity = (void*)identityHandle.AddrOfPinnedObject(),
+                    FileIdentityLength = checked((uint)identity.Length),
+                    Flags = CloudPlaceholderPlatform.CreateFlags(specification),
+                };
+            }
+
+            if (!request.TryMarkTerminal())
+            {
+                return;
+            }
+
+            fixed (CfPlaceholderCreateInfo* entriesPointer = entries)
+            {
+                CfOperationInfo operationInfo = request.CreateOperationInfo(
+                    CfOperationType.TransferPlaceholders);
+                CfOperationParameters parameters = default;
+                parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationTransferPlaceholdersParameters)));
+                parameters.TransferPlaceholders = new CfOperationTransferPlaceholdersParameters
+                {
+                    Flags = page.IsComplete &&
+                        (page.TotalCount is null || page.TotalCount <= entries.Length)
+                        ? CfOperationTransferPlaceholdersFlags.DisableOnDemandPopulation
+                        : CfOperationTransferPlaceholdersFlags.None,
+                    CompletionStatus = NtStatus.Success,
+                    PlaceholderTotalCount = page.TotalCount ?? -1,
+                    PlaceholderArray = entriesPointer,
+                    PlaceholderCount = checked((uint)entries.Length),
+                };
+                int result = CfApi.CfExecute(&operationInfo, &parameters);
+                ThrowIfFailed("CloudProviderSession.TransferPlaceholders", result);
+            }
+        }
+        finally
+        {
+            for (int index = pinned.Count - 1; index >= 0; index--)
+            {
+                pinned[index].Free();
+            }
+        }
+    }
+
     private static unsafe void SendFailure(ActiveRequest request, NtStatus status)
     {
         if (!request.TryMarkTerminal())
@@ -394,6 +568,29 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         _ = CfApi.CfExecute(&operationInfo, &parameters);
     }
 
+    private static unsafe void SendPlaceholderFailure(
+        PlaceholderRequest request,
+        NtStatus status)
+    {
+        if (!request.TryMarkTerminal())
+        {
+            return;
+        }
+
+        CfOperationInfo operationInfo = request.CreateOperationInfo(
+            CfOperationType.TransferPlaceholders);
+        CfOperationParameters parameters = default;
+        parameters.ParamSize = checked((uint)(8 + sizeof(CfOperationTransferPlaceholdersParameters)));
+        parameters.TransferPlaceholders = new CfOperationTransferPlaceholdersParameters
+        {
+            CompletionStatus = status,
+            PlaceholderTotalCount = 0,
+            PlaceholderArray = null,
+            PlaceholderCount = 0,
+        };
+        _ = CfApi.CfExecute(&operationInfo, &parameters);
+    }
+
     private void CompleteRequest(ActiveRequest activeRequest, NtStatus status)
     {
         SendFailure(activeRequest, status);
@@ -409,11 +606,33 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         activeRequest.DisposeCancellation();
     }
 
+    private void CompletePlaceholderRequest(PlaceholderRequest activeRequest, NtStatus status)
+    {
+        SendPlaceholderFailure(activeRequest, status);
+        RemovePlaceholderRequest(activeRequest);
+    }
+
+    private void RemovePlaceholderRequest(PlaceholderRequest activeRequest)
+    {
+        ((ICollection<KeyValuePair<long, PlaceholderRequest>>)_placeholderRequests).Remove(
+            new KeyValuePair<long, PlaceholderRequest>(
+                activeRequest.RequestKey.Internal,
+                activeRequest));
+        activeRequest.DisposeCancellation();
+    }
+
     private unsafe void CancelRequest(CfCallbackInfo* callbackInfo)
     {
         if (_requests.TryGetValue(callbackInfo->RequestKey.Internal, out ActiveRequest? request))
         {
             request.Cancel();
+        }
+
+        if (_placeholderRequests.TryGetValue(
+            callbackInfo->RequestKey.Internal,
+            out PlaceholderRequest? placeholderRequest))
+        {
+            placeholderRequest.Cancel();
         }
     }
 
@@ -448,6 +667,43 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static unsafe void CancelFetchDataCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        _ = callbackParameters;
+        try
+        {
+            if (callbackInfo is not null)
+            {
+                GetSession(callbackInfo)?.CancelRequest(callbackInfo);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void FetchPlaceholdersCallback(
+        CfCallbackInfo* callbackInfo,
+        CfCallbackParameters* callbackParameters)
+    {
+        try
+        {
+            if (callbackInfo is not null && callbackParameters is not null)
+            {
+                GetSession(callbackInfo)?.DispatchFetchPlaceholders(callbackInfo, callbackParameters);
+            }
+        }
+        catch (Exception)
+        {
+            // Exceptions must never cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    private static unsafe void CancelFetchPlaceholdersCallback(
         CfCallbackInfo* callbackInfo,
         CfCallbackParameters* callbackParameters)
     {
@@ -543,6 +799,67 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         };
 
         internal void MarkSuccessful() => Interlocked.Exchange(ref _terminal, 1);
+
+        internal bool TryMarkTerminal() => Interlocked.Exchange(ref _terminal, 1) == 0;
+
+        internal void DisposeCancellation()
+        {
+            if (Interlocked.Exchange(ref _cancellationDisposed, 1) == 0)
+            {
+                Cancellation.Dispose();
+            }
+        }
+    }
+
+    private sealed class PlaceholderRequest
+    {
+        private int _terminal;
+        private int _cancellationDisposed;
+
+        internal PlaceholderRequest(
+            CfConnectionKey connectionKey,
+            CfTransferKey transferKey,
+            CfRequestKey requestKey,
+            CloudProviderFetchPlaceholdersRequest request,
+            CancellationTokenSource cancellation)
+        {
+            ConnectionKey = connectionKey;
+            TransferKey = transferKey;
+            RequestKey = requestKey;
+            Request = request;
+            Cancellation = cancellation;
+        }
+
+        internal CfConnectionKey ConnectionKey { get; }
+
+        internal CfTransferKey TransferKey { get; }
+
+        internal CfRequestKey RequestKey { get; }
+
+        internal CloudProviderFetchPlaceholdersRequest Request { get; }
+
+        internal CancellationTokenSource Cancellation { get; }
+
+        internal void Cancel()
+        {
+            try
+            {
+                Cancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Completion won the race and already released this request token.
+            }
+        }
+
+        internal unsafe CfOperationInfo CreateOperationInfo(CfOperationType type) => new()
+        {
+            StructSize = (uint)sizeof(CfOperationInfo),
+            Type = type,
+            ConnectionKey = ConnectionKey,
+            TransferKey = TransferKey,
+            RequestKey = RequestKey,
+        };
 
         internal bool TryMarkTerminal() => Interlocked.Exchange(ref _terminal, 1) == 0;
 

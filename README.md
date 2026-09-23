@@ -39,10 +39,10 @@ The state database stores synchronization coordination metadata, never file cont
 ## Status
 
 CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, native
-callback, placeholder creation, transfer primitives, the managed demand provider, and the local
-change feed are implemented. The transactional state contracts and official SQLite provider are
-implemented. Remote change application and the complete product sample remain future phases. No
-production package has been released.
+callback, placeholder creation, transfer primitives, the managed demand provider, the local
+change feed, and application-owned remote change application are implemented. The transactional
+state contracts and official SQLite provider are implemented. The complete product sample and
+release packaging remain future phases. No production package has been released.
 
 ## Sync Root Lifecycle
 
@@ -263,6 +263,45 @@ Recursive state changes visit parents before children; recursive deletion visits
 parents. Symbolic links and junctions are never traversed. State operations omit link entries,
 while deletion removes only the link itself and leaves its target untouched. These methods do not
 enumerate remote children or substitute for provider `FETCH_PLACEHOLDERS` callbacks.
+
+## Remote Change Application
+
+Remote transport, authentication, cursors, content bytes, and business conflict policy remain
+application-owned. CfSharp applies an immutable remote batch to the local namespace, records
+durable progress and conflicts, suppresses provider-generated local echoes, and advances the
+opaque cursor only after each entry result is committed:
+
+```csharp
+CloudRemoteChangeBatch remoteBatch = new(
+    "provider-batch-42",
+    initialCursor,
+    changes,
+    finalCursor);
+
+CloudRemoteApplyResult applied = await fileSystem.ApplyRemoteChangesAsync(
+    remoteBatch,
+    new CloudRemoteApplyOptions { ConflictResolver = conflictResolver },
+    cancellationToken);
+
+if (applied.RequiresRetry)
+{
+    // Re-submit the same immutable batch; durable progress resumes at the safe cursor.
+}
+
+foreach (Guid conflictId in applied.ConflictIds)
+{
+    CloudRemoteApplyEntryResult resolved = await fileSystem.ResolveRemoteConflictAsync(
+        conflictId,
+        new CloudRemoteConflictResolution(CloudRemoteConflictDecision.Defer),
+        cancellationToken);
+}
+```
+
+`CloudRemoteDirectoryQuery` and `ICloudRemoteDirectoryCatalog` provide a paged remote metadata
+view without creating local placeholders. `ReadSynchronizedDirectoryPageAsync` is a separate,
+side-effect-free view over materialized children and durable item state after an explicit remote
+batch. Neither view performs hidden network access or substitutes for demand callbacks. Remote
+file upserts carry length and metadata only; a configured content provider hydrates bytes later.
 
 ## Sample Provider
 

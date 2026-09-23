@@ -1,6 +1,6 @@
 namespace CfSharp;
 
-/// <summary>Controls the access and oplock behavior of a <see cref="CloudItemLease"/>.</summary>
+/// <summary>Controls the access and oplock behavior of a cloud item lease.</summary>
 /// <remarks>
 /// The options are validated before Windows is called. A lease never exposes the underlying
 /// protected handle; these values only select the access flags used while opening it.

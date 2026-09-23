@@ -258,6 +258,25 @@ public sealed partial class CloudFileSystem
                     $"Remote batch '{batch.BatchId}' has invalid durable progress.");
             }
 
+            if (existing.Status is CloudRemoteBatchStatus.Applied)
+            {
+                if (existing.AppliedEntryCount != batch.Changes.Count ||
+                    (batch.Changes.Count > 0 &&
+                     !string.Equals(
+                         existing.LastAppliedChangeId,
+                         batch.Changes[^1].ChangeId,
+                         StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException(
+                        $"Remote batch '{batch.BatchId}' is marked applied without a complete terminal entry.");
+                }
+            }
+            else if (existing.AppliedEntryCount == batch.Changes.Count && batch.Changes.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Remote batch '{batch.BatchId}' has complete progress but is not marked applied.");
+            }
+
             CloudRemoteBatchStatus status = existing.Status is CloudRemoteBatchStatus.Applied
                 ? CloudRemoteBatchStatus.Applied
                 : CloudRemoteBatchStatus.Applying;
@@ -925,6 +944,15 @@ public sealed partial class CloudFileSystem
         CloudRemoteBatchStatus status,
         CancellationToken cancellationToken)
     {
+        if (status is CloudRemoteBatchStatus.Applied &&
+            (appliedEntryCount != batch.Changes.Count ||
+             (batch.Changes.Count > 0 &&
+              !string.Equals(change.ChangeId, batch.Changes[^1].ChangeId, StringComparison.Ordinal))))
+        {
+            throw new InvalidOperationException(
+                $"Remote batch '{batch.BatchId}' cannot publish an incomplete applied state.");
+        }
+
         await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
                 "The cloud file system has no open state store.")).BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);

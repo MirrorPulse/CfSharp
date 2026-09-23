@@ -248,6 +248,55 @@ public sealed class CloudFileSystemRemoteChangeTests
     }
 
     [Fact]
+    public async Task CorruptAppliedRemoteBatchFailsClosedBeforePublishingCursor()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            ICloudStateStoreFactory factory = InMemoryCloudStateStoreContractTests.CreateFactoryForTesting();
+            await using (ICloudStateStore store = await factory.OpenAsync(new CloudStateStoreContext(rootPath)))
+            await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.RemoteBatches.UpsertAsync(
+                    new CloudRemoteBatchState(
+                        "corrupt-batch",
+                        [1],
+                        appliedEntryCount: 1,
+                        totalEntryCount: 2,
+                        CloudRemoteBatchStatus.Applied,
+                        [],
+                        DateTimeOffset.UtcNow,
+                        ReadOnlyMemory<byte>.Empty,
+                        lastAppliedChangeId: "first"));
+                await transaction.CommitAsync();
+            }
+
+            await using CloudFileSystem fileSystem = CloudFileSystem
+                .CreateBuilder(rootPath, new TestRuntime())
+                .WithStateStore(factory)
+                .Build();
+            await fileSystem.StartAsync();
+
+            CloudRemoteChangeBatch batch = new(
+                "corrupt-batch",
+                new byte[] { 1 },
+                [
+                    CreateMissingMove("first", "first.txt", "missing-first.txt"),
+                    CreateMissingMove("second", "second.txt", "missing-second.txt"),
+                ],
+                new byte[] { 9 });
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fileSystem
+                .ApplyRemoteChangesAsync(batch)
+                .AsTask());
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task ConflictResolverRunsAndDefaultDurableConflictRemainsActionable()
     {
         string rootPath = CreateRoot();

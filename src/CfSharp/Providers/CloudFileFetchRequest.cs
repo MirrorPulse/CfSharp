@@ -16,7 +16,8 @@ public sealed class CloudFileFetchRequest
         long offset,
         long length,
         CloudProviderProgressReporter? progress = null,
-        Func<CloudPlaceholderSpec, bool, ValueTask>? restartHydration = null)
+        Func<CloudPlaceholderSpec, bool, ValueTask>? restartHydration = null,
+        CloudCorrelationVector? correlationVector = null)
     {
         NormalizedPath = normalizedPath;
         _fileIdentity = (byte[])fileIdentity.Clone();
@@ -24,6 +25,7 @@ public sealed class CloudFileFetchRequest
         Offset = offset;
         Length = length;
         Progress = progress;
+        CorrelationVector = correlationVector;
         _restartHydration = restartHydration;
     }
 
@@ -41,6 +43,9 @@ public sealed class CloudFileFetchRequest
 
     /// <summary>Gets the length in bytes of the required range.</summary>
     public long Length { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 
     /// <summary>Gets the optional best-effort progress reporter for this request.</summary>
     /// <remarks>

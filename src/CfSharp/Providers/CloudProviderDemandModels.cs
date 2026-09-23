@@ -76,7 +76,8 @@ public sealed class CloudProviderFetchPlaceholdersRequest
         string normalizedPath,
         ReadOnlySpan<byte> directoryIdentity,
         string searchPattern,
-        string? continuationToken)
+        string? continuationToken,
+        CloudCorrelationVector? correlationVector = null)
     {
         ArgumentNullException.ThrowIfNull(normalizedPath);
         ArgumentNullException.ThrowIfNull(searchPattern);
@@ -84,6 +85,7 @@ public sealed class CloudProviderFetchPlaceholdersRequest
         _directoryIdentity = directoryIdentity.ToArray();
         SearchPattern = searchPattern;
         ContinuationToken = continuationToken;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the normalized callback path of the directory being populated.</summary>
@@ -98,8 +100,11 @@ public sealed class CloudProviderFetchPlaceholdersRequest
     /// <summary>Gets the last continuation token committed for this directory, when any.</summary>
     public string? ContinuationToken { get; }
 
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
+
     internal CloudProviderFetchPlaceholdersRequest WithContinuationToken(string? continuationToken) =>
-        new(NormalizedPath, _directoryIdentity, SearchPattern, continuationToken);
+        new(NormalizedPath, _directoryIdentity, SearchPattern, continuationToken, CorrelationVector);
 }
 
 /// <summary>Contains an immutable page of child placeholder specifications.</summary>
@@ -181,7 +186,8 @@ public sealed class CloudProviderValidateDataRequest
         long fileSize,
         long offset,
         long length,
-        bool explicitHydration)
+        bool explicitHydration,
+        CloudCorrelationVector? correlationVector = null)
     {
         ArgumentNullException.ThrowIfNull(normalizedPath);
         ArgumentOutOfRangeException.ThrowIfNegative(fileSize);
@@ -197,6 +203,7 @@ public sealed class CloudProviderValidateDataRequest
         FileSize = fileSize;
         Range = new CloudFileRange(offset, length);
         IsExplicitHydration = explicitHydration;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the normalized callback path.</summary>
@@ -213,6 +220,9 @@ public sealed class CloudProviderValidateDataRequest
 
     /// <summary>Gets whether Windows requested validation after explicit hydration.</summary>
     public bool IsExplicitHydration { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 }
 
 /// <summary>Contains an immutable request to approve dehydration.</summary>
@@ -224,12 +234,14 @@ public sealed class CloudProviderDehydrateRequest
         string normalizedPath,
         ReadOnlySpan<byte> fileIdentity,
         bool isBackground,
-        CloudProviderDehydrationReason reason)
+        CloudProviderDehydrationReason reason,
+        CloudCorrelationVector? correlationVector = null)
     {
         NormalizedPath = normalizedPath;
         _fileIdentity = fileIdentity.ToArray();
         IsBackground = isBackground;
         Reason = reason;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the normalized callback path.</summary>
@@ -243,6 +255,9 @@ public sealed class CloudProviderDehydrateRequest
 
     /// <summary>Gets the operating-system dehydration reason.</summary>
     public CloudProviderDehydrationReason Reason { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 }
 
 /// <summary>Identifies why Windows requested dehydration.</summary>
@@ -269,12 +284,18 @@ public sealed class CloudProviderDeleteRequest
 {
     private readonly byte[] _fileIdentity;
 
-    internal CloudProviderDeleteRequest(string normalizedPath, ReadOnlySpan<byte> fileIdentity, bool isDirectory, bool isUndelete)
+    internal CloudProviderDeleteRequest(
+        string normalizedPath,
+        ReadOnlySpan<byte> fileIdentity,
+        bool isDirectory,
+        bool isUndelete,
+        CloudCorrelationVector? correlationVector = null)
     {
         NormalizedPath = normalizedPath;
         _fileIdentity = fileIdentity.ToArray();
         IsDirectory = isDirectory;
         IsUndelete = isUndelete;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the normalized callback path.</summary>
@@ -288,6 +309,9 @@ public sealed class CloudProviderDeleteRequest
 
     /// <summary>Gets whether the notification restores a previously deleted placeholder.</summary>
     public bool IsUndelete { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 }
 
 /// <summary>Contains an immutable request to approve a rename or move.</summary>
@@ -301,7 +325,8 @@ public sealed class CloudProviderRenameRequest
         string targetPath,
         bool isDirectory,
         bool sourceInScope,
-        bool targetInScope)
+        bool targetInScope,
+        CloudCorrelationVector? correlationVector = null)
     {
         NormalizedPath = normalizedPath;
         _fileIdentity = fileIdentity.ToArray();
@@ -309,6 +334,7 @@ public sealed class CloudProviderRenameRequest
         IsDirectory = isDirectory;
         SourceInScope = sourceInScope;
         TargetInScope = targetInScope;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the normalized source path.</summary>
@@ -328,6 +354,9 @@ public sealed class CloudProviderRenameRequest
 
     /// <summary>Gets whether the target is inside the connected sync root.</summary>
     public bool TargetInScope { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 }
 
 /// <summary>Contains an immutable provider validation result.</summary>
@@ -361,13 +390,15 @@ public sealed class CloudProviderCompletionNotification
         string normalizedPath,
         ReadOnlySpan<byte> fileIdentity,
         uint flags,
-        string? relatedPath)
+        string? relatedPath,
+        CloudCorrelationVector? correlationVector = null)
     {
         Kind = kind;
         NormalizedPath = normalizedPath;
         _fileIdentity = fileIdentity.ToArray();
         Flags = flags;
         RelatedPath = relatedPath;
+        CorrelationVector = correlationVector;
     }
 
     /// <summary>Gets the notification kind.</summary>
@@ -384,4 +415,7 @@ public sealed class CloudProviderCompletionNotification
 
     /// <summary>Gets the related source path for a rename completion, when supplied.</summary>
     public string? RelatedPath { get; }
+
+    /// <summary>Gets a copied callback correlation vector, when Windows supplied one.</summary>
+    public CloudCorrelationVector? CorrelationVector { get; }
 }

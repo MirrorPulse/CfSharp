@@ -350,6 +350,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         CfTransferKey transferKey = callbackInfo->TransferKey;
         CfRequestKey requestKey = callbackInfo->RequestKey;
         long fileSize = callbackInfo->FileSize;
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudFileFetchRequest request = new(
             path,
             identity,
@@ -365,7 +366,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 nativeRequest.RequiredFileOffset,
                 nativeRequest.RequiredLength,
                 replacement,
-                markInSync));
+                markInSync),
+            correlationVector);
         CancellationTokenSource cancellation =
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         ActiveRequest activeRequest = new(
@@ -490,11 +492,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ? string.Empty
             : new string(parameters->FetchPlaceholders.Pattern);
         _directoryContinuations.TryGetValue(path, out string? continuationToken);
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudProviderFetchPlaceholdersRequest request = new(
             path,
             identity,
             pattern,
-            continuationToken);
+            continuationToken,
+            correlationVector);
         CancellationTokenSource cancellation =
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         PlaceholderRequest activeRequest = new(
@@ -789,13 +793,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ? string.Empty
             : new string(callbackInfo->NormalizedPath);
         CfCallbackValidateDataParameters nativeRequest = parameters->ValidateData;
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudProviderValidateDataRequest request = new(
             path,
             identity,
             callbackInfo->FileSize,
             nativeRequest.RequiredFileOffset,
             nativeRequest.RequiredLength,
-            nativeRequest.Flags.HasFlag(CfCallbackValidateDataFlags.ExplicitHydration));
+            nativeRequest.Flags.HasFlag(CfCallbackValidateDataFlags.ExplicitHydration),
+            correlationVector);
         CancellationTokenSource cancellation =
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         ValidationRequest activeRequest = new(
@@ -877,12 +883,14 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ? string.Empty
             : new string(callbackInfo->NormalizedPath);
         byte[] identity = CopyIdentity(callbackInfo);
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CfCallbackDehydrateParameters nativeRequest = parameters->Dehydrate;
         CloudProviderDehydrateRequest request = new(
             path,
             identity,
             nativeRequest.Flags.HasFlag(CfCallbackDehydrateFlags.Background),
-            (CloudProviderDehydrationReason)nativeRequest.Reason);
+            (CloudProviderDehydrationReason)nativeRequest.Reason,
+            correlationVector);
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
@@ -1012,11 +1020,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ? string.Empty
             : new string(callbackInfo->NormalizedPath);
         CfCallbackDeleteParameters nativeRequest = parameters->Delete;
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudProviderDeleteRequest request = new(
             path,
             CopyIdentity(callbackInfo),
             nativeRequest.Flags.HasFlag(CfCallbackDeleteFlags.IsDirectory),
-            nativeRequest.Flags.HasFlag(CfCallbackDeleteFlags.IsUndelete));
+            nativeRequest.Flags.HasFlag(CfCallbackDeleteFlags.IsUndelete),
+            correlationVector);
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
@@ -1046,13 +1056,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         string targetPath = nativeRequest.TargetPath is null
             ? string.Empty
             : new string(nativeRequest.TargetPath);
+        CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudProviderRenameRequest request = new(
             path,
             CopyIdentity(callbackInfo),
             targetPath,
             nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.IsDirectory),
             nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.SourceInScope),
-            nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.TargetInScope));
+            nativeRequest.Flags.HasFlag(CfCallbackRenameFlags.TargetInScope),
+            correlationVector);
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
@@ -1127,6 +1139,17 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         return length == 0
             ? []
             : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, length).ToArray();
+    }
+
+    private static unsafe CloudCorrelationVector? CopyCorrelationVector(CfCallbackInfo* callbackInfo)
+    {
+        if (callbackInfo->CorrelationVector is null)
+        {
+            return null;
+        }
+
+        return CloudCorrelationVector.FromNative(
+            *(CfCorrelationVector*)callbackInfo->CorrelationVector);
     }
 
     private unsafe void DispatchCompletion(
@@ -1831,7 +1854,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                             path,
                             CopyIdentity(callbackInfo),
                             (uint)callbackParameters->OpenCompletion.Flags,
-                            relatedPath: null));
+                            relatedPath: null,
+                            correlationVector: CopyCorrelationVector(callbackInfo)));
                 }
             }
         }
@@ -1863,7 +1887,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                             path,
                             CopyIdentity(callbackInfo),
                             (uint)callbackParameters->CloseCompletion.Flags,
-                            relatedPath: null));
+                            relatedPath: null,
+                            correlationVector: CopyCorrelationVector(callbackInfo)));
                 }
             }
         }
@@ -1913,7 +1938,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                             path,
                             CopyIdentity(callbackInfo),
                             (uint)callbackParameters->DehydrateCompletion.Flags,
-                            relatedPath: null));
+                            relatedPath: null,
+                            correlationVector: CopyCorrelationVector(callbackInfo)));
                 }
             }
         }
@@ -1963,7 +1989,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                             path,
                             CopyIdentity(callbackInfo),
                             (uint)callbackParameters->DeleteCompletion.Flags,
-                            relatedPath: null));
+                            relatedPath: null,
+                            correlationVector: CopyCorrelationVector(callbackInfo)));
                 }
             }
         }
@@ -2015,7 +2042,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                             path,
                             CopyIdentity(callbackInfo),
                             (uint)callbackParameters->RenameCompletion.Flags,
-                            sourcePath));
+                            sourcePath,
+                            CopyCorrelationVector(callbackInfo)));
                 }
             }
         }

@@ -125,6 +125,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         return (CloudProviderStatus)status;
     }
 
+    internal CfConnectionKey ConnectionKey
+    {
+        get
+        {
+            ThrowIfStopping();
+            return _connectionKey;
+        }
+    }
+
     /// <summary>Synchronously stops the provider session and releases its callback resources.</summary>
     /// <remarks>
     /// This compatibility method blocks the calling thread while cooperative handlers drain,

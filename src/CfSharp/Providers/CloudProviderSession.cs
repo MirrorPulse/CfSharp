@@ -1577,8 +1577,27 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                     PlaceholderArray = entriesPointer,
                     PlaceholderCount = checked((uint)entries.Length),
                 };
-                int result = CfApi.CfExecute(&operationInfo, &parameters);
-                ThrowIfFailed("CloudProviderSession.TransferPlaceholders", result);
+                int result;
+                try
+                {
+                    result = CfApi.CfExecute(&operationInfo, &parameters);
+                }
+                catch
+                {
+                    request.ReleaseTerminalClaim();
+                    throw;
+                }
+
+                if (result < 0)
+                {
+                    request.ReleaseTerminalClaim();
+                    CloudDiagnostics.RecordNativeFailure("CloudProviderSession.TransferPlaceholders");
+                    throw CloudFilesException.FromHResult(
+                        "CloudProviderSession.TransferPlaceholders",
+                        request.Request.NormalizedPath,
+                        result);
+                }
+
                 int[] entryResults = new int[entries.Length];
                 for (int index = 0; index < entries.Length; index++)
                 {
@@ -1648,7 +1667,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Offset = request.Request.Offset,
             Length = request.Request.Length,
         };
-        _ = CfApi.CfExecute(&operationInfo, &parameters);
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ObserveCompletionResult("CloudProviderSession.TransferDataFailure", result);
     }
 
     private static unsafe void SendPlaceholderFailure(
@@ -1671,7 +1691,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             PlaceholderArray = null,
             PlaceholderCount = 0,
         };
-        _ = CfApi.CfExecute(&operationInfo, &parameters);
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ObserveCompletionResult("CloudProviderSession.TransferPlaceholdersFailure", result);
     }
 
     private static unsafe void SendAckData(
@@ -1692,7 +1713,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Offset = request.Request.Range.Offset,
             Length = request.Request.Range.Length,
         };
-        _ = CfApi.CfExecute(&operationInfo, &parameters);
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ObserveCompletionResult("CloudProviderSession.AcknowledgeData", result);
     }
 
     private static unsafe void SendPolicyResult(PolicyRequest request, NtStatus status)
@@ -1731,7 +1753,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(request), request.OperationType, "Unsupported acknowledgement operation.");
         }
 
-        _ = CfApi.CfExecute(&operationInfo, &parameters);
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ObserveCompletionResult("CloudProviderSession.PolicyResult", result);
     }
 
     private static unsafe void SendPolicyFailure(
@@ -1765,7 +1788,16 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(operationType));
         }
 
-        _ = CfApi.CfExecute(&operationInfo, &parameters);
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ObserveCompletionResult("CloudProviderSession.PolicyFailure", result);
+    }
+
+    private static void ObserveCompletionResult(string operation, int hresult)
+    {
+        if (hresult < 0)
+        {
+            CloudDiagnostics.RecordNativeFailure(operation, hresult);
+        }
     }
 
     private void CompleteRequest(ActiveRequest activeRequest, NtStatus status)
@@ -2289,6 +2321,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         };
 
         internal bool TryMarkTerminal() => Interlocked.Exchange(ref _terminal, 1) == 0;
+
+        internal void ReleaseTerminalClaim() => Interlocked.CompareExchange(ref _terminal, 0, 1);
 
         internal void DisposeCancellation()
         {

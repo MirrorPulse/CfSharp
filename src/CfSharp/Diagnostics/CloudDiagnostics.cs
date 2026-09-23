@@ -98,10 +98,23 @@ public static class CloudDiagnostics
     }
 
     internal static void RecordNativeFailure(string operation)
+        => RecordNativeFailure(operation, hresult: null);
+
+    internal static void RecordNativeFailure(string operation, int? hresult)
     {
         try
         {
-            NativeFailures.Add(1, new KeyValuePair<string, object?>("cfsharp.operation", operation));
+            if (hresult is int value)
+            {
+                NativeFailures.Add(
+                    1,
+                    new KeyValuePair<string, object?>("cfsharp.operation", operation),
+                    new KeyValuePair<string, object?>("cfsharp.native.hresult", value));
+            }
+            else
+            {
+                NativeFailures.Add(1, new KeyValuePair<string, object?>("cfsharp.operation", operation));
+            }
         }
         catch
         {

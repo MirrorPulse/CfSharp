@@ -515,9 +515,11 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
 
         if (localChangeFeed is not null)
         {
+            bool disposed = false;
             try
             {
                 await localChangeFeed.DisposeAsync().ConfigureAwait(false);
+                disposed = true;
             }
             catch (Exception exception)
             {
@@ -529,13 +531,23 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                     return failures;
                 }
             }
+
+            if (!disposed)
+            {
+                lock (_localChangeFeedGate)
+                {
+                    _localChangeFeed ??= localChangeFeed;
+                }
+            }
         }
 
         if (_runtimeSession is not null)
         {
+            bool disposed = false;
             try
             {
                 await _runtimeSession.DisposeAsync().ConfigureAwait(false);
+                disposed = true;
             }
             catch (Exception exception)
             {
@@ -558,7 +570,10 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                 return failures;
             }
 
-            _runtimeSession = null;
+            if (disposed)
+            {
+                _runtimeSession = null;
+            }
         }
 
         if (_stateStore is not null)

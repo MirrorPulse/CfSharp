@@ -57,7 +57,7 @@ internal static class CloudPlaceholderMutationPlatform
                 Length = range.ExtendsToEnd ? CfApi.EndOfFile : range.Length,
             })
             .ToArray();
-        CfFsMetadata metadata = CreateMetadata(patch.Metadata, currentFileSize);
+        CfFsMetadata metadata = CreateMetadata(patch.Metadata, patch.FileSize ?? currentFileSize);
         bool dehydrates = patch.DehydrateWholeFile || ranges.Length != 0;
         CfOpenFileFlags openFlags = dehydrates
             ? CfOpenFileFlags.Exclusive | CfOpenFileFlags.WriteAccess

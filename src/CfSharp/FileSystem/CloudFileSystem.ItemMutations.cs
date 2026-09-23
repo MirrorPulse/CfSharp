@@ -180,6 +180,13 @@ public sealed partial class CloudFileSystem
                 nameof(patch));
         }
 
+        if (patch.FileSize is not null && item.Kind is not CloudItemKind.File)
+        {
+            throw new ArgumentException(
+                "A replacement file size can only be applied to a file.",
+                nameof(patch));
+        }
+
         if (item.Kind is CloudItemKind.File && patch.PopulationState is not null)
         {
             throw new ArgumentException(

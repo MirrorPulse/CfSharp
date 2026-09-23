@@ -173,6 +173,8 @@ public sealed class CloudPlaceholderModelTests
             .WithDehydratedRanges(ranges)
             .WithExtrinsicPropertyRemoval()
             .WithInSyncVerification()
+            .WithMetadata(CloudPlaceholderMetadata.CreateFileBuilder().Build())
+            .WithFileSize(8192)
             .WithExpectedUsn(42)
             .Build();
         ranges.Add(new CloudFileRange(4096, 4096));
@@ -181,6 +183,7 @@ public sealed class CloudPlaceholderModelTests
         Assert.Equal(CloudPlaceholderSynchronizationChange.MarkNotInSync, patch.SynchronizationChange);
         Assert.Single(patch.DehydrateRanges);
         Assert.Equal(42, patch.ExpectedUsn);
+        Assert.Equal(8192, patch.FileSize);
         Assert.True(patch.RemoveExtrinsicProperties);
         Assert.True(patch.RequireInSync);
         Assert.Throws<InvalidOperationException>(() => CloudPlaceholderPatch.CreateBuilder().Build());
@@ -193,6 +196,10 @@ public sealed class CloudPlaceholderModelTests
             .CreateBuilder()
             .WithContentMode(CloudFileContentMode.AlwaysFull)
             .WithFullDehydration()
+            .Build());
+        Assert.Throws<InvalidOperationException>(() => CloudPlaceholderPatch
+            .CreateBuilder()
+            .WithFileSize(1)
             .Build());
     }
 

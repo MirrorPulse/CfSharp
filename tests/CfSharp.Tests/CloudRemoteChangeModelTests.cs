@@ -123,6 +123,8 @@ public sealed class CloudRemoteChangeModelTests
             new CloudRemoteApplyOptions { MaximumEntries = 0 }.Validate());
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new CloudRemoteApplyOptions { EchoSuppressionLifetime = TimeSpan.Zero }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new CloudRemoteApplyOptions { EchoSuppressionObservationCount = 0 }.Validate());
     }
 
     private static CloudRemoteChange CreateFileChange(string changeId, ReadOnlyMemory<byte> cursor) =>

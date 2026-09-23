@@ -453,6 +453,11 @@ public sealed record CloudRemoteApplyOptions
     /// <summary>Gets how long an echo-suppression record remains active.</summary>
     public TimeSpan EchoSuppressionLifetime { get; init; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// Gets the number of matching local watcher observations reserved for one remote mutation.
+    /// </summary>
+    public int EchoSuppressionObservationCount { get; init; } = 4;
+
     /// <summary>Gets the maximum entries one call may attempt before returning a partial result.</summary>
     public int MaximumEntries { get; init; } = 256;
 
@@ -475,6 +480,14 @@ public sealed record CloudRemoteApplyOptions
                 nameof(MaximumEntries),
                 MaximumEntries,
                 "The maximum entry count must be positive and no larger than 65536.");
+        }
+
+        if (EchoSuppressionObservationCount <= 0 || EchoSuppressionObservationCount > 64)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(EchoSuppressionObservationCount),
+                EchoSuppressionObservationCount,
+                "The echo-suppression observation count must be between 1 and 64.");
         }
     }
 }

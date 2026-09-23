@@ -23,6 +23,7 @@ public sealed class CloudPlaceholderPatch
         _dehydrateRanges = Array.AsReadOnly(builder.DehydrateRanges.ToArray());
         RemoveExtrinsicProperties = builder.RemoveExtrinsicProperties;
         RequireInSync = builder.RequireInSync;
+        FileSize = builder.FileSize;
         ExpectedUsn = builder.ExpectedUsn;
     }
 
@@ -59,6 +60,12 @@ public sealed class CloudPlaceholderPatch
     /// <summary>Gets whether the update fails unless the placeholder is currently in sync.</summary>
     public bool RequireInSync { get; }
 
+    /// <summary>
+    /// Gets the replacement logical file length, or null when the current length is preserved.
+    /// </summary>
+    /// <remarks>The value is valid only when replacement metadata is also supplied.</remarks>
+    public long? FileSize { get; }
+
     /// <summary>Gets the expected current USN, or null for no condition.</summary>
     public long? ExpectedUsn { get; }
 
@@ -89,6 +96,8 @@ public sealed class CloudPlaceholderPatch
         internal bool RemoveExtrinsicProperties { get; private set; }
 
         internal bool RequireInSync { get; private set; }
+
+        internal long? FileSize { get; private set; }
 
         internal long? ExpectedUsn { get; private set; }
 
@@ -180,6 +189,15 @@ public sealed class CloudPlaceholderPatch
             return this;
         }
 
+        /// <summary>Replaces the logical file length written with replacement metadata.</summary>
+        /// <param name="length">Non-negative logical length of the file.</param>
+        public Builder WithFileSize(long length)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(length);
+            FileSize = length;
+            return this;
+        }
+
         /// <summary>Makes the update conditional on a positive current USN.</summary>
         public Builder WithExpectedUsn(long expectedUsn)
         {
@@ -207,6 +225,12 @@ public sealed class CloudPlaceholderPatch
                     "An always-full placeholder cannot be dehydrated by the same patch.");
             }
 
+            if (FileSize is not null && Metadata is null)
+            {
+                throw new InvalidOperationException(
+                    "A replacement file size requires replacement metadata.");
+            }
+
             bool hasChange = Metadata is not null ||
                 IdentityChange is not CloudPlaceholderIdentityChange.Unchanged ||
                 SynchronizationChange is not CloudPlaceholderSynchronizationChange.Unchanged ||
@@ -215,7 +239,8 @@ public sealed class CloudPlaceholderPatch
                 DehydrateWholeFile ||
                 DehydrateRanges.Count != 0 ||
                 RemoveExtrinsicProperties ||
-                RequireInSync;
+                RequireInSync ||
+                FileSize is not null;
             if (!hasChange)
             {
                 throw new InvalidOperationException("A placeholder patch must request at least one change.");

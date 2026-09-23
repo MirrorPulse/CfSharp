@@ -477,6 +477,17 @@ public sealed partial class CloudFileSystem
             : change.Kind is CloudRemoteChangeKind.MetadataUpdate
                 ? CloudStateOperationKind.MetadataUpdate
                 : CloudStateOperationKind.ContentUpdate;
+        if (!upsert && (context.LocalState is null || !localExists))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                context.LocalState,
+                CloudRemoteConflictReason.MissingItem));
+        }
+
+        // Register suppression only after all conflict checks that can return
+        // without mutating the namespace. A conflict must not leave behind a
+        // record that could consume an unrelated future local observation.
         if (options.SuppressLocalEcho)
         {
             await RegisterRemoteEchoSuppressionAsync(
@@ -486,14 +497,6 @@ public sealed partial class CloudFileSystem
                     options,
                     cancellationToken)
                 .ConfigureAwait(false);
-        }
-
-        if (!upsert && (context.LocalState is null || !localExists))
-        {
-            return RemoteEntryOutcome.ConflictResult(CreateConflict(
-                change,
-                context.LocalState,
-                CloudRemoteConflictReason.MissingItem));
         }
 
         if (context.LocalState is null || !localExists)

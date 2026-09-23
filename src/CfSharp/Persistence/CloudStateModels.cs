@@ -427,8 +427,17 @@ public sealed class CloudEchoSuppressionState
         string? previousRelativePath,
         Guid? observedItemId)
     {
-        if (Kind != observedKind || (ItemId is Guid expectedItemId &&
-                observedItemId is Guid actualItemId && expectedItemId != actualItemId))
+        if (Kind != observedKind)
+        {
+            return false;
+        }
+
+        // A suppression tied to an item identity must fail closed when the
+        // watcher cannot recover an identity for the observed path. Matching
+        // by path alone could consume a remote suppression for an unrelated
+        // local item that happens to reuse the same name.
+        if (ItemId is Guid expectedItemId &&
+            (observedItemId is not Guid actualItemId || expectedItemId != actualItemId))
         {
             return false;
         }

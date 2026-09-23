@@ -96,4 +96,33 @@ public sealed class CloudStateModelTests
             DateTimeOffset.UtcNow,
             remainingObservations: 0));
     }
+
+    [Fact]
+    public void IdentityBoundEchoSuppressionFailsClosedWithoutObservedIdentity()
+    {
+        Guid itemId = Guid.NewGuid();
+        CloudEchoSuppressionState suppression = new(
+            Guid.NewGuid(),
+            itemId,
+            CloudStateOperationKind.ContentUpdate,
+            "file.txt",
+            [],
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.False(suppression.Matches(
+            CloudStateOperationKind.ContentUpdate,
+            "file.txt",
+            previousRelativePath: null,
+            observedItemId: null));
+        Assert.False(suppression.Matches(
+            CloudStateOperationKind.ContentUpdate,
+            "file.txt",
+            previousRelativePath: null,
+            observedItemId: Guid.NewGuid()));
+        Assert.True(suppression.Matches(
+            CloudStateOperationKind.ContentUpdate,
+            "file.txt",
+            previousRelativePath: null,
+            observedItemId: itemId));
+    }
 }

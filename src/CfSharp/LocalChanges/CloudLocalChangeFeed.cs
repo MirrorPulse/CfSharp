@@ -261,20 +261,57 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         string relativePath,
         DateTimeOffset expiresAt,
         Guid? itemId = null,
+        CancellationToken cancellationToken = default) =>
+        await SuppressProviderEchoAsync(
+            kind,
+            relativePath,
+            expiresAt,
+            itemId,
+            previousRelativePath: null,
+            expectedObservationCount: 1,
+            cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Records a provider-originated write suppression window with optional source-path and
+    /// multi-observation matching data.
+    /// </summary>
+    /// <param name="kind">Expected local operation kind.</param>
+    /// <param name="relativePath">Canonical path relative to the sync root.</param>
+    /// <param name="expiresAt">UTC time after which the suppression is ignored.</param>
+    /// <param name="itemId">Known item identity, when available.</param>
+    /// <param name="previousRelativePath">
+    /// Optional second canonical path associated with the provider operation, such as a move source.
+    /// </param>
+    /// <param name="expectedObservationCount">
+    /// Number of matching watcher observations to consume before the suppression is removed.
+    /// </param>
+    /// <param name="cancellationToken">Token that cancels before the suppression commits.</param>
+    public async ValueTask SuppressProviderEchoAsync(
+        CloudStateOperationKind kind,
+        string relativePath,
+        DateTimeOffset expiresAt,
+        Guid? itemId,
+        string? previousRelativePath,
+        int expectedObservationCount = 1,
         CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         CloudItemPath path = CloudItemPathResolver.Resolve(_syncRootPath, relativePath, allowRoot: false);
+        CloudItemPath? previousPath = previousRelativePath is null
+            ? null
+            : CloudItemPathResolver.Resolve(_syncRootPath, previousRelativePath, allowRoot: false);
         await using ICloudStateTransaction transaction = await _stateStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await transaction.EchoSuppressions.UpsertAsync(
             new CloudEchoSuppressionState(
                 Guid.NewGuid(),
                 itemId,
-                kind,
-                path.RelativePath,
-                Encoding.UTF8.GetBytes("local-change-feed/v1"),
-                expiresAt),
+                 kind,
+                 path.RelativePath,
+                 Encoding.UTF8.GetBytes("local-change-feed/v1"),
+                 expiresAt,
+                 previousPath?.RelativePath,
+                 expectedObservationCount),
             cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -510,18 +547,40 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             CloudLocalChangeKind.Delete => CloudStateOperationKind.Delete,
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
+        CloudItemState? current = await transaction.Items
+            .GetByRelativePathAsync(path.RelativePath, cancellationToken).ConfigureAwait(false);
+        CloudItemState? previous = previousPath is null
+            ? null
+            : await transaction.Items
+                .GetByRelativePathAsync(previousPath.Value.RelativePath, cancellationToken)
+                .ConfigureAwait(false);
+        CloudItemState? observedState = kind == CloudLocalChangeKind.Delete
+            ? current
+            : previous ?? current;
         IReadOnlyList<CloudEchoSuppressionState> suppressions = await transaction.EchoSuppressions
             .ListActiveAsync(observedAt, cancellationToken).ConfigureAwait(false);
         CloudEchoSuppressionState? suppression = suppressions.FirstOrDefault(candidate =>
-            string.Equals(candidate.RelativePath, path.RelativePath, StringComparison.OrdinalIgnoreCase) ||
-            (previousPath is not null && string.Equals(
-                candidate.RelativePath,
-                previousPath.Value.RelativePath,
-                StringComparison.OrdinalIgnoreCase)));
+            candidate.Matches(
+                operationKind,
+                path.RelativePath,
+                previousPath?.RelativePath,
+                observedState?.ItemId));
         if (suppression is not null)
         {
-            await transaction.EchoSuppressions.RemoveAsync(suppression.SuppressionId, cancellationToken)
-                .ConfigureAwait(false);
+            if (suppression.RemainingObservations == 1)
+            {
+                await transaction.EchoSuppressions.RemoveAsync(
+                        suppression.SuppressionId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await transaction.EchoSuppressions.UpsertAsync(
+                        suppression.Consume(),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
             await UpsertCheckpointAsync(
                 transaction,
                 observation,
@@ -577,13 +636,6 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             return;
         }
 
-        CloudItemState? current = await transaction.Items
-            .GetByRelativePathAsync(path.RelativePath, cancellationToken).ConfigureAwait(false);
-        CloudItemState? previous = previousPath is null
-            ? null
-            : await transaction.Items
-                .GetByRelativePathAsync(previousPath.Value.RelativePath, cancellationToken)
-                .ConfigureAwait(false);
         CloudItemState? state = kind == CloudLocalChangeKind.Delete
             ? current
             : previous ?? current;

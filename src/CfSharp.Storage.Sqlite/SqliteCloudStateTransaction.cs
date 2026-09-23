@@ -869,7 +869,8 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
     private sealed class EchoSuppressionRepository : ICloudEchoSuppressionRepository
     {
         private const string SelectColumns = """
-            SELECT suppression_id, item_id, kind, relative_path, payload, expires_at_ticks
+            SELECT suppression_id, item_id, kind, relative_path, previous_relative_path,
+                   payload, expires_at_ticks, remaining_observations
             FROM echo_suppressions
             """;
 
@@ -936,15 +937,19 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                     await using SqliteCommand command = _owner.CreateCommand(
                         """
                         INSERT INTO echo_suppressions(
-                            suppression_id, item_id, kind, relative_path, payload, expires_at_ticks)
+                            suppression_id, item_id, kind, relative_path, previous_relative_path,
+                            payload, expires_at_ticks, remaining_observations)
                         VALUES(
-                            $suppression_id, $item_id, $kind, $relative_path, $payload, $expires_at_ticks)
+                            $suppression_id, $item_id, $kind, $relative_path, $previous_relative_path,
+                            $payload, $expires_at_ticks, $remaining_observations)
                         ON CONFLICT(suppression_id) DO UPDATE SET
                             item_id = excluded.item_id,
                             kind = excluded.kind,
                             relative_path = excluded.relative_path,
+                            previous_relative_path = excluded.previous_relative_path,
                             payload = excluded.payload,
-                            expires_at_ticks = excluded.expires_at_ticks;
+                            expires_at_ticks = excluded.expires_at_ticks,
+                            remaining_observations = excluded.remaining_observations;
                         """,
                         token);
                     command.Parameters.AddWithValue(
@@ -955,8 +960,14 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                         suppression.ItemId is Guid itemId ? itemId.ToString("D") : DBNull.Value);
                     command.Parameters.AddWithValue("$kind", (int)suppression.Kind);
                     command.Parameters.AddWithValue("$relative_path", suppression.RelativePath);
+                    command.Parameters.AddWithValue(
+                        "$previous_relative_path",
+                        suppression.PreviousRelativePath ?? (object)DBNull.Value);
                     command.Parameters.AddWithValue("$payload", suppression.Payload.ToArray());
                     command.Parameters.AddWithValue("$expires_at_ticks", ToUtcTicks(suppression.ExpiresAt));
+                    command.Parameters.AddWithValue(
+                        "$remaining_observations",
+                        suppression.RemainingObservations);
                     return await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                 },
                 "The SQLite echo suppression could not be written.",
@@ -991,10 +1002,12 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
             new(
                 Guid.Parse(reader.GetString(0)),
                 reader.IsDBNull(1) ? null : Guid.Parse(reader.GetString(1)),
-                (CloudStateOperationKind)reader.GetInt32(2),
-                reader.GetString(3),
-                ReadBytes(reader, 4),
-                FromUtcTicks(reader.GetInt64(5)));
+                 (CloudStateOperationKind)reader.GetInt32(2),
+                 reader.GetString(3),
+                 ReadBytes(reader, 5),
+                 FromUtcTicks(reader.GetInt64(6)),
+                 reader.IsDBNull(4) ? null : reader.GetString(4),
+                 reader.GetInt32(7));
     }
 
     private static async ValueTask ExecuteDeleteAsync(

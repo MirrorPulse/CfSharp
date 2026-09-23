@@ -31,6 +31,21 @@ public sealed class CloudStateModelTests
         Assert.True(batch.Cursor.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
         Assert.True(batch.Fingerprint.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
         Assert.Equal("change-1", batch.LastAppliedChangeId);
+
+        CloudEchoSuppressionState suppression = new(
+            Guid.NewGuid(),
+            null,
+            CloudStateOperationKind.Move,
+            "destination.txt",
+            bytes,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            "source.txt",
+            2);
+        bytes[1] = 8;
+
+        Assert.True(suppression.Payload.Span.SequenceEqual(new byte[] { 9, 2, 3 }));
+        Assert.Equal("source.txt", suppression.PreviousRelativePath);
+        Assert.Equal(2, suppression.RemainingObservations);
     }
 
     [Fact]
@@ -72,5 +87,13 @@ public sealed class CloudStateModelTests
             "file.txt",
             [],
             DateTimeOffset.UtcNow));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CloudEchoSuppressionState(
+            Guid.NewGuid(),
+            null,
+            CloudStateOperationKind.Create,
+            "file.txt",
+            [],
+            DateTimeOffset.UtcNow,
+            remainingObservations: 0));
     }
 }

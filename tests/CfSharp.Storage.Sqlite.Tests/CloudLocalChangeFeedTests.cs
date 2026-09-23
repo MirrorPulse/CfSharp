@@ -118,6 +118,55 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProviderEchoSuppressionConsumesExpectedObservationsAndMatchesKind()
+    {
+        await using ICloudStateStore store = await OpenStoreAsync();
+        FakeSource source = new();
+        await using CloudLocalChangeFeed feed = CreateFeed(store, source);
+        await feed.StartAsync();
+
+        await feed.SuppressProviderEchoAsync(
+            CloudStateOperationKind.ContentUpdate,
+            "replayed.txt",
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            itemId: null,
+            previousRelativePath: null,
+            expectedObservationCount: 2);
+        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
+        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
+        await Task.Delay(100);
+
+        await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+        {
+            Assert.Empty(await transaction.Operations.ListAsync(10));
+            Assert.Empty(await transaction.EchoSuppressions.ListActiveAsync(DateTimeOffset.UtcNow));
+            await transaction.RollbackAsync();
+        }
+
+        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
+        await Task.Delay(100);
+        await using (ICloudStateTransaction afterBudget = await store.BeginTransactionAsync())
+        {
+            Assert.Single(await afterBudget.Operations.ListAsync(10));
+            await afterBudget.RollbackAsync();
+        }
+
+        await feed.AcknowledgeAsync(
+            (await feed.ReadBatchAsync()).Changes.Select(change => change.OperationId));
+        await feed.SuppressProviderEchoAsync(
+            CloudStateOperationKind.ContentUpdate,
+            "kind-sensitive.txt",
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await source.EmitAsync(new(LocalChangeSourceAction.Created, "kind-sensitive.txt"));
+        await Task.Delay(100);
+        await using ICloudStateTransaction kindMismatch = await store.BeginTransactionAsync();
+        CloudOperationJournalEntry kindSensitiveOperation = Assert.Single(
+            await kindMismatch.Operations.ListAsync(10));
+        Assert.Equal(CloudStateOperationKind.Create, kindSensitiveOperation.Kind);
+        await kindMismatch.RollbackAsync();
+    }
+
+    [Fact]
     public async Task InvalidPathAndChannelOverflowRequireAFullRescan()
     {
         await using ICloudStateStore store = await OpenStoreAsync();

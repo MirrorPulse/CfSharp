@@ -364,7 +364,9 @@ public sealed class CloudEchoSuppressionState
         CloudStateOperationKind kind,
         string relativePath,
         ReadOnlySpan<byte> payload,
-        DateTimeOffset expiresAt)
+        DateTimeOffset expiresAt,
+        string? previousRelativePath = null,
+        int remainingObservations = 1)
     {
         if (suppressionId == Guid.Empty)
         {
@@ -378,12 +380,18 @@ public sealed class CloudEchoSuppressionState
             throw new ArgumentException("The item identifier cannot be empty when supplied.", nameof(itemId));
         }
 
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(remainingObservations);
+
         SuppressionId = suppressionId;
         ItemId = itemId;
         Kind = CloudStateModelValidation.RequireDefined(kind, nameof(kind));
         RelativePath = CloudStateModelValidation.RequireNonNull(relativePath, nameof(relativePath));
+        PreviousRelativePath = previousRelativePath is null
+            ? null
+            : CloudStateModelValidation.RequireText(previousRelativePath, nameof(previousRelativePath));
         _payload = payload.ToArray();
         ExpiresAt = expiresAt.ToUniversalTime();
+        RemainingObservations = remainingObservations;
     }
 
     /// <summary>Gets the idempotent suppression identifier.</summary>
@@ -398,11 +406,58 @@ public sealed class CloudEchoSuppressionState
     /// <summary>Gets the canonical affected path relative to the sync root.</summary>
     public string RelativePath { get; }
 
+    /// <summary>
+    /// Gets the optional second path associated with the expected observation, such as the source
+    /// path of a move.
+    /// </summary>
+    public string? PreviousRelativePath { get; }
+
     /// <summary>Gets a read-only view of versioned CfSharp matching data.</summary>
     public ReadOnlyMemory<byte> Payload => _payload;
 
     /// <summary>Gets the UTC instant after which the record is no longer active.</summary>
     public DateTimeOffset ExpiresAt { get; }
+
+    /// <summary>Gets the number of matching local observations that may still be consumed.</summary>
+    public int RemainingObservations { get; }
+
+    internal bool Matches(
+        CloudStateOperationKind observedKind,
+        string relativePath,
+        string? previousRelativePath,
+        Guid? observedItemId)
+    {
+        if (Kind != observedKind || (ItemId is Guid expectedItemId &&
+                observedItemId is Guid actualItemId && expectedItemId != actualItemId))
+        {
+            return false;
+        }
+
+        return PathsOverlap(RelativePath, relativePath, previousRelativePath) ||
+            (PreviousRelativePath is not null &&
+             PathsOverlap(PreviousRelativePath, relativePath, previousRelativePath));
+    }
+
+    internal CloudEchoSuppressionState Consume() =>
+        new(
+            SuppressionId,
+            ItemId,
+            Kind,
+            RelativePath,
+            _payload,
+            ExpiresAt,
+            PreviousRelativePath,
+            RemainingObservations - 1);
+
+    private static bool PathsOverlap(
+        string expectedPath,
+        string observedPath,
+        string? observedPreviousPath) =>
+        string.Equals(expectedPath, observedPath, StringComparison.OrdinalIgnoreCase) ||
+        (observedPreviousPath is not null && string.Equals(
+            expectedPath,
+            observedPreviousPath,
+            StringComparison.OrdinalIgnoreCase));
 }
 
 internal static class CloudStateModelValidation

@@ -175,7 +175,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            2L,
+            3L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -187,7 +187,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
-    public async Task VersionOneRemoteBatchSchemaMigratesToVersionTwo()
+    public async Task VersionOneRemoteBatchSchemaMigratesToVersionThree()
     {
         await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
         {
@@ -202,7 +202,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            2L,
+            3L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -215,6 +215,34 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
+    public async Task VersionTwoEchoSuppressionSchemaMigratesToVersionThree()
+    {
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        await ExecuteSqlAsync(
+            _databasePath,
+            "UPDATE cfsharp_schema SET version = 2 WHERE singleton = 1;");
+
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        Assert.Equal(
+            3L,
+            await ExecuteScalarInt64Async(
+                _databasePath,
+                "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
+        Assert.Equal(
+            2L,
+            await ExecuteScalarInt64Async(
+                _databasePath,
+                "SELECT COUNT(*) FROM pragma_table_info('echo_suppressions') " +
+                "WHERE name IN ('previous_relative_path', 'remaining_observations');"));
+    }
+
+    [Fact]
     public async Task NewerSchemaVersionIsRejected()
     {
         await ExecuteSqlAsync(
@@ -224,7 +252,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
                 singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
                 version INTEGER NOT NULL
             );
-            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 3);
+            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 4);
             """);
 
         SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<

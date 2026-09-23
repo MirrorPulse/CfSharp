@@ -349,7 +349,7 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
 
 internal static class SqliteSchema
 {
-    internal const int CurrentVersion = 2;
+    internal const int CurrentVersion = 3;
 
     internal static async Task InitializeAsync(
         string connectionString,
@@ -414,6 +414,12 @@ internal static class SqliteSchema
             if (version < 2)
             {
                 await MigrateVersionTwoAsync(connection, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (version < 3)
+            {
+                await MigrateVersionThreeAsync(connection, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -541,8 +547,10 @@ internal static class SqliteSchema
                 item_id TEXT NULL,
                 kind INTEGER NOT NULL,
                 relative_path TEXT NOT NULL COLLATE NOCASE,
+                previous_relative_path TEXT NULL COLLATE NOCASE,
                 payload BLOB NOT NULL,
                 expires_at_ticks INTEGER NOT NULL,
+                remaining_observations INTEGER NOT NULL DEFAULT 1,
                 FOREIGN KEY (item_id) REFERENCES items(item_id) ON DELETE SET NULL
             );
 
@@ -621,6 +629,54 @@ internal static class SqliteSchema
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task MigrateVersionThreeAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "echo_suppressions", cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using SqliteTransaction transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!await ColumnExistsAsync(
+                connection,
+                "echo_suppressions",
+                "previous_relative_path",
+                cancellationToken).ConfigureAwait(false))
+        {
+            await using SqliteCommand addPreviousPath = connection.CreateCommand();
+            addPreviousPath.Transaction = transaction;
+            addPreviousPath.CommandText =
+                "ALTER TABLE echo_suppressions ADD COLUMN previous_relative_path TEXT NULL COLLATE NOCASE;";
+            await addPreviousPath.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!await ColumnExistsAsync(
+                connection,
+                "echo_suppressions",
+                "remaining_observations",
+                cancellationToken).ConfigureAwait(false))
+        {
+            await using SqliteCommand addRemaining = connection.CreateCommand();
+            addRemaining.Transaction = transaction;
+            addRemaining.CommandText =
+                "ALTER TABLE echo_suppressions ADD COLUMN remaining_observations INTEGER NOT NULL DEFAULT 1;";
+            await addRemaining.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using SqliteCommand updateVersion = connection.CreateCommand();
+        updateVersion.Transaction = transaction;
+        updateVersion.CommandText =
+            "UPDATE cfsharp_schema SET version = $version WHERE singleton = 1;";
+        updateVersion.Parameters.AddWithValue("$version", CurrentVersion);
+        await updateVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task EnableWalAsync(
         SqliteConnection connection,
         string databasePath,
@@ -682,6 +738,23 @@ internal static class SqliteSchema
                 SqliteCloudStateStoreError.InvalidSchema,
                 databasePath,
                 "The remote_batches table is missing Phase 8 replay columns.");
+        }
+
+        if (!await ColumnExistsAsync(
+                connection,
+                "echo_suppressions",
+                "previous_relative_path",
+                cancellationToken).ConfigureAwait(false) ||
+            !await ColumnExistsAsync(
+                connection,
+                "echo_suppressions",
+                "remaining_observations",
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new SqliteCloudStateStoreException(
+                SqliteCloudStateStoreError.InvalidSchema,
+                databasePath,
+                "The echo_suppressions table is missing Phase 8 observation columns.");
         }
 
         await using (SqliteCommand foreignKeyCommand = connection.CreateCommand())

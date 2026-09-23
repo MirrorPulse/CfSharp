@@ -127,6 +127,78 @@ public sealed class CloudFileSystemRemoteChangeTests
         }
     }
 
+    [Fact]
+    public async Task RemoteDirectoryCatalogIsPagedAndCannotMutateTheNamespace()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+            StaticRemoteCatalog catalog = new(
+                new CloudRemoteDirectoryPage(
+                [
+                    new CloudRemoteDirectoryEntry(
+                        "remote-alpha",
+                        "revision-1",
+                        CloudItemKind.File,
+                        "alpha.txt",
+                        length: 5,
+                        metadata: CloudPlaceholderMetadata.CreateFileBuilder().Build()),
+                    new CloudRemoteDirectoryEntry(
+                        "remote-folder",
+                        "revision-1",
+                        CloudItemKind.Directory,
+                        "folder",
+                        metadata: CloudPlaceholderMetadata.CreateDirectoryBuilder().Build()),
+                ]));
+
+            CloudRemoteDirectoryPage page = await fileSystem.ReadRemoteDirectoryPageAsync(
+                catalog,
+                new CloudRemoteDirectoryQuery(pageSize: 2));
+
+            Assert.True(catalog.WasCalled);
+            Assert.Equal(["alpha.txt", "folder"], page.Entries.Select(entry => entry.Name));
+            Assert.False(File.Exists(Path.Combine(rootPath, "alpha.txt")));
+            Assert.False(Directory.Exists(Path.Combine(rootPath, "folder")));
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task SynchronizedDirectoryViewIsDeterministicAndResumesByCursor()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(rootPath, "b.txt"), "b");
+            await File.WriteAllTextAsync(Path.Combine(rootPath, "a.txt"), "a");
+            Directory.CreateDirectory(Path.Combine(rootPath, "folder"));
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+
+            CloudSynchronizedDirectoryPage first =
+                await fileSystem.ReadSynchronizedDirectoryPageAsync(
+                    new CloudSynchronizedDirectoryQuery(pageSize: 2));
+            Assert.False(first.IsComplete);
+            Assert.Equal(["a.txt", "b.txt"], first.Entries.Select(entry => entry.Name));
+            Assert.All(first.Entries, entry => Assert.True(entry.IsMaterialized));
+
+            CloudSynchronizedDirectoryPage second =
+                await fileSystem.ReadSynchronizedDirectoryPageAsync(
+                    new CloudSynchronizedDirectoryQuery(
+                        pageSize: 2,
+                        continuationCursor: first.ContinuationCursor));
+            Assert.True(second.IsComplete);
+            Assert.Equal(["folder"], second.Entries.Select(entry => entry.Name));
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
     private static async Task<CloudFileSystem> StartAsync(string rootPath)
     {
         CloudFileSystem fileSystem = CloudFileSystem
@@ -167,5 +239,19 @@ public sealed class CloudFileSystemRemoteChangeTests
     private sealed class TestRuntimeSession : ICloudFileSystemRuntimeSession
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StaticRemoteCatalog(CloudRemoteDirectoryPage page)
+        : ICloudRemoteDirectoryCatalog
+    {
+        public bool WasCalled { get; private set; }
+
+        public ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(
+            CloudRemoteDirectoryQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            return ValueTask.FromResult(page);
+        }
     }
 }

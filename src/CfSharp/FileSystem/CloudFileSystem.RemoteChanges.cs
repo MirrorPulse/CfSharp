@@ -370,6 +370,9 @@ public sealed partial class CloudFileSystem
                 .ConfigureAwait(false);
         }
 
+        bool pathExists = File.Exists(ToFullPath(change.RelativePath)) ||
+            Directory.Exists(ToFullPath(change.RelativePath));
+
         bool pathBelongsToAnotherItem = context.ByPath is not null &&
             !context.ByPath.IsTombstone &&
             (context.ByRemoteId is null || context.ByRemoteId.ItemId != context.ByPath.ItemId) &&
@@ -384,6 +387,14 @@ public sealed partial class CloudFileSystem
             return RemoteEntryOutcome.ConflictResult(CreateConflict(
                 change,
                 context.LocalState,
+                CloudRemoteConflictReason.PathCollision));
+        }
+
+        if (pathExists && context.LocalState is null && context.ByPath is null)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState: null,
                 CloudRemoteConflictReason.PathCollision));
         }
 
@@ -477,16 +488,16 @@ public sealed partial class CloudFileSystem
                 .ConfigureAwait(false);
         }
 
+        if (!upsert && (context.LocalState is null || !localExists))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                context.LocalState,
+                CloudRemoteConflictReason.MissingItem));
+        }
+
         if (context.LocalState is null || !localExists)
         {
-            if (!upsert)
-            {
-                return RemoteEntryOutcome.ConflictResult(CreateConflict(
-                    change,
-                    context.LocalState,
-                    CloudRemoteConflictReason.MissingItem));
-            }
-
             await CreateRemotePlaceholderAsync(change, itemId, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -536,7 +547,7 @@ public sealed partial class CloudFileSystem
                 CloudRemoteConflictReason.Move));
         }
 
-        if (context.LocalOperations.Count != 0)
+        if (options.PreserveUnsynchronizedLocalContent && context.LocalOperations.Count != 0)
         {
             return RemoteEntryOutcome.ConflictResult(CreateConflict(
                 change,
@@ -655,7 +666,7 @@ public sealed partial class CloudFileSystem
                 CloudRemoteConflictReason.MissingItem));
         }
 
-        if (context.LocalOperations.Count != 0)
+        if (options.PreserveUnsynchronizedLocalContent && context.LocalOperations.Count != 0)
         {
             return RemoteEntryOutcome.ConflictResult(CreateConflict(
                 change,

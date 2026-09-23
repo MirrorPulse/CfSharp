@@ -199,6 +199,118 @@ public sealed class CloudFileSystemRemoteChangeTests
         }
     }
 
+    [Fact]
+    public async Task RemoteBatchResumesPartialConflictResultsWithoutAdvancingPastSafeCursor()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+            CloudRemoteChange firstChange = CreateMissingMove(
+                "partial-1",
+                "first.txt",
+                "first-old.txt",
+                new byte[] { 2 });
+            CloudRemoteChange secondChange = CreateMissingMove("partial-2", "second.txt", "second-old.txt");
+            CloudRemoteChangeBatch batch = new(
+                "partial-batch",
+                new byte[] { 1 },
+                [firstChange, secondChange],
+                new byte[] { 4 });
+
+            CloudRemoteApplyResult first = await fileSystem.ApplyRemoteChangesAsync(
+                batch,
+                new CloudRemoteApplyOptions { MaximumEntries = 1 });
+            Assert.Equal(CloudRemoteBatchStatus.Applying, first.Status);
+            Assert.True(first.RequiresRetry);
+            Assert.Equal(1, first.AppliedEntryCount);
+            Assert.Equal(new byte[] { 2 }, first.SafeCursor.ToArray());
+            Assert.Equal(
+                [CloudRemoteApplyEntryStatus.Conflict, CloudRemoteApplyEntryStatus.NotProcessed],
+                first.Entries.Select(entry => entry.Status));
+            Assert.Single(first.ConflictIds);
+
+            CloudRemoteApplyResult resumed = await fileSystem.ApplyRemoteChangesAsync(
+                batch,
+                new CloudRemoteApplyOptions { MaximumEntries = 1 });
+            Assert.Equal(CloudRemoteBatchStatus.Applied, resumed.Status);
+            Assert.False(resumed.RequiresRetry);
+            Assert.Equal(2, resumed.AppliedEntryCount);
+            Assert.Equal(new byte[] { 4 }, resumed.SafeCursor.ToArray());
+            Assert.Equal(
+                [CloudRemoteApplyEntryStatus.AlreadyApplied, CloudRemoteApplyEntryStatus.Conflict],
+                resumed.Entries.Select(entry => entry.Status));
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task ConflictResolverRunsAndDefaultDurableConflictRemainsActionable()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+            RecordingResolver resolver = new(
+                new CloudRemoteConflictResolution(CloudRemoteConflictDecision.KeepLocal));
+            CloudRemoteChange change = CreateMissingMove("resolver-1", "resolved.txt", "missing.txt");
+            CloudRemoteApplyResult result = await fileSystem.ApplyRemoteChangesAsync(
+                new CloudRemoteChangeBatch(
+                    "resolver-batch",
+                    Array.Empty<byte>(),
+                    [change],
+                    new byte[] { 9 }),
+                new CloudRemoteApplyOptions { ConflictResolver = resolver });
+
+            Assert.True(resolver.WasCalled);
+            Assert.Equal(CloudRemoteApplyEntryStatus.Conflict, Assert.Single(result.Entries).Status);
+            Assert.Single(result.ConflictIds);
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteUpsertAgainstUntrackedLocalPathBecomesCollisionConflict()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            string occupiedPath = Path.Combine(rootPath, "occupied.txt");
+            await File.WriteAllTextAsync(occupiedPath, "local");
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+            CloudRemoteChange upsert = new(
+                "collision-1",
+                CloudRemoteChangeKind.FileUpsert,
+                "remote-collision",
+                "revision-1",
+                CloudItemKind.File,
+                "occupied.txt",
+                length: 6,
+                metadata: CloudPlaceholderMetadata.CreateFileBuilder().Build());
+
+            CloudRemoteApplyResult result = await fileSystem.ApplyRemoteChangesAsync(
+                new CloudRemoteChangeBatch(
+                    "collision-batch",
+                    Array.Empty<byte>(),
+                    [upsert],
+                    new byte[] { 1 }));
+
+            CloudRemoteApplyEntryResult entry = Assert.Single(result.Entries);
+            Assert.Equal(CloudRemoteApplyEntryStatus.Conflict, entry.Status);
+            Assert.Equal(CloudRemoteConflictReason.PathCollision, entry.Conflict!.Reason);
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
     private static async Task<CloudFileSystem> StartAsync(string rootPath)
     {
         CloudFileSystem fileSystem = CloudFileSystem
@@ -218,6 +330,21 @@ public sealed class CloudFileSystemRemoteChangeTests
         Directory.CreateDirectory(path);
         return path;
     }
+
+    private static CloudRemoteChange CreateMissingMove(
+        string changeId,
+        string destination,
+        string source,
+        ReadOnlyMemory<byte> cursorAfter = default) =>
+        new(
+            changeId,
+            CloudRemoteChangeKind.Move,
+            "remote-" + changeId,
+            "revision-1",
+            CloudItemKind.File,
+            destination,
+            previousRelativePath: source,
+            cursorAfter: cursorAfter);
 
     private static void DeleteRoot(string path)
     {
@@ -252,6 +379,20 @@ public sealed class CloudFileSystemRemoteChangeTests
         {
             WasCalled = true;
             return ValueTask.FromResult(page);
+        }
+    }
+
+    private sealed class RecordingResolver(CloudRemoteConflictResolution resolution)
+        : ICloudRemoteConflictResolver
+    {
+        public bool WasCalled { get; private set; }
+
+        public ValueTask<CloudRemoteConflictResolution> ResolveAsync(
+            CloudRemoteConflict conflict,
+            CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            return ValueTask.FromResult(resolution);
         }
     }
 }

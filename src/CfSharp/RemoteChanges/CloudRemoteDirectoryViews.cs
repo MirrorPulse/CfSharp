@@ -192,6 +192,13 @@ public sealed class CloudRemoteDirectoryPage
 
         Entries = new ReadOnlyCollection<CloudRemoteDirectoryEntry>(materialized);
         _continuationCursor = continuationCursor.ToArray();
+        if (!isComplete && _continuationCursor.Length == 0)
+        {
+            throw new ArgumentException(
+                "An incomplete remote directory page must provide a continuation cursor.",
+                nameof(continuationCursor));
+        }
+
         IsComplete = isComplete;
     }
 

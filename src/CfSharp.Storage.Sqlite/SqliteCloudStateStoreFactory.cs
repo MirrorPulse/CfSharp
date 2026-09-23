@@ -1,8 +1,8 @@
-using System.Globalization;
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
 using Microsoft.Data.Sqlite;
+using Microsoft.Win32.SafeHandles;
 
 namespace CfSharp.Storage.Sqlite;
 

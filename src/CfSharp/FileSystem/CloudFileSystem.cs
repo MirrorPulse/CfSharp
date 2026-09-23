@@ -522,6 +522,12 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             catch (Exception exception)
             {
                 (failures ??= []).Add(exception);
+                if (!localChangeFeed.DisposeCompletion.IsCompleted)
+                {
+                    // The feed may still be draining a journal transaction. Its owner must keep
+                    // the state store alive until the deferred completion callback runs.
+                    return failures;
+                }
             }
         }
 

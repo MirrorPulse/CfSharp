@@ -37,6 +37,8 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             AllowSynchronousContinuations = false,
         });
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly TaskCompletionSource<object?> _disposeCompletion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _gate = new();
     private Task? _sourceTask;
     private Task? _processorTask;
@@ -76,6 +78,8 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
 
     /// <summary>Gets whether the feed has been started and can deliver journal entries.</summary>
     public bool IsStarted => Volatile.Read(ref _started) != 0 && Volatile.Read(ref _disposed) == 0;
+
+    internal Task DisposeCompletion => _disposeCompletion.Task;
 
     /// <summary>Starts the native watcher and the durable normalization worker.</summary>
     /// <param name="cancellationToken">Token that cancels startup before the watcher is opened.</param>
@@ -329,9 +333,11 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
+            await _disposeCompletion.Task.ConfigureAwait(false);
             return;
         }
 
+        Exception? failure = null;
         try
         {
             await _source.DisposeAsync().ConfigureAwait(false);
@@ -353,14 +359,53 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
         finally
         {
             _shutdown.Cancel();
             _sourceEvents.Writer.TryComplete();
-            _availability.Writer.TryComplete();
-            _shutdown.Dispose();
-            _onDisposed?.Invoke(this);
+            if (_processorTask is null || _processorTask.IsCompleted)
+            {
+                CompleteDispose();
+            }
+            else
+            {
+                _ = CompleteDisposeAfterProcessorAsync(_processorTask);
+            }
         }
+
+        if (failure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
+    private async Task CompleteDisposeAfterProcessorAsync(Task processorTask)
+    {
+        try
+        {
+            await processorTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            // The first DisposeAsync caller observes the processor failure. The deferred cleanup
+            // must still release feed-owned synchronization resources and notify the owner.
+        }
+        finally
+        {
+            CompleteDispose();
+        }
+    }
+
+    private void CompleteDispose()
+    {
+        _availability.Writer.TryComplete();
+        _shutdown.Dispose();
+        _onDisposed?.Invoke(this);
+        _disposeCompletion.TrySetResult(null);
     }
 
     internal static CloudLocalChangeFeed CreateForTesting(

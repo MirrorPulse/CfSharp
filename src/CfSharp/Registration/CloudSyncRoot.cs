@@ -206,12 +206,11 @@ public sealed partial class CloudSyncRoot
                 nameof(fileIdentity));
         }
 
-        string targetPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(Path, relativePath));
-        string rootPrefix = Path + System.IO.Path.DirectorySeparatorChar;
-        if (!targetPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("The placeholder path escapes the sync root.", nameof(relativePath));
-        }
+        CloudItemPath resolvedPath = CloudItemPathResolver.Resolve(
+            Path,
+            relativePath,
+            allowRoot: false);
+        string targetPath = resolvedPath.FullPath;
 
         string? parentPath = System.IO.Path.GetDirectoryName(targetPath);
         if (parentPath is null || !Directory.Exists(parentPath))
@@ -220,7 +219,7 @@ public sealed partial class CloudSyncRoot
                 $"The placeholder parent directory does not exist: '{parentPath}'.");
         }
 
-        string normalizedRelativePath = System.IO.Path.GetRelativePath(Path, targetPath);
+        string normalizedRelativePath = resolvedPath.RelativePath;
         fixed (char* rootPathPointer = Path)
         fixed (char* relativePathPointer = normalizedRelativePath)
         fixed (byte* identityPointer = fileIdentity)

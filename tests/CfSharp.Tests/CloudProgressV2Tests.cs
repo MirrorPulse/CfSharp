@@ -33,4 +33,25 @@ public sealed class CloudProgressV2Tests
                 ProgressFallbackPolicy = (CloudProgressFallbackPolicy)99,
             }.Validate());
     }
+
+    [Fact]
+    public void ReporterScopesMonotonicStatePerTarget()
+    {
+        List<CloudProgressTarget> observedTargets = [];
+        CloudProviderProgressReporter reporter = new(
+            (target, _, _) =>
+            {
+                observedTargets.Add(target);
+                return new CloudProgressReportResult(
+                    CloudProgressReportState.Reported,
+                    UsedV2: target.RequestId is not null,
+                    HResult: 0);
+            });
+        CloudProgressTarget first = CloudProgressTarget.Request(new CloudProviderRequestId(10), 1);
+        CloudProgressTarget second = CloudProgressTarget.Request(new CloudProviderRequestId(11), 1);
+
+        Assert.Equal(CloudProgressReportState.Reported, reporter.Report(first, 8, 10).State);
+        Assert.Equal(CloudProgressReportState.Reported, reporter.Report(second, 1, 10).State);
+        Assert.Equal([first, second], observedTargets);
+    }
 }

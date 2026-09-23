@@ -414,7 +414,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                     connectionKey,
                     transferKey,
                     requestKey,
-                    CloudProgressTarget.CurrentHydrationRequest,
+                    target,
                     completed,
                     total,
                     _options.ProgressFallbackPolicy)),

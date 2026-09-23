@@ -780,7 +780,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                     await using SqliteCommand command = _owner.CreateCommand(
                         """
                         SELECT batch_id, cursor, applied_entry_count, total_entry_count,
-                               status, payload, updated_at_ticks
+                               status, payload, fingerprint, last_change_id, updated_at_ticks
                         FROM remote_batches WHERE batch_id = $batch_id;
                         """,
                         token);
@@ -808,16 +808,18 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                         """
                         INSERT INTO remote_batches(
                             batch_id, cursor, applied_entry_count, total_entry_count,
-                            status, payload, updated_at_ticks)
+                            status, payload, fingerprint, last_change_id, updated_at_ticks)
                         VALUES(
                             $batch_id, $cursor, $applied_entry_count, $total_entry_count,
-                            $status, $payload, $updated_at_ticks)
+                            $status, $payload, $fingerprint, $last_change_id, $updated_at_ticks)
                         ON CONFLICT(batch_id) DO UPDATE SET
                             cursor = excluded.cursor,
                             applied_entry_count = excluded.applied_entry_count,
                             total_entry_count = excluded.total_entry_count,
                             status = excluded.status,
                             payload = excluded.payload,
+                            fingerprint = excluded.fingerprint,
+                            last_change_id = excluded.last_change_id,
                             updated_at_ticks = excluded.updated_at_ticks;
                         """,
                         token);
@@ -827,6 +829,10 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                     command.Parameters.AddWithValue("$total_entry_count", batch.TotalEntryCount);
                     command.Parameters.AddWithValue("$status", (int)batch.Status);
                     command.Parameters.AddWithValue("$payload", batch.Payload.ToArray());
+                    command.Parameters.AddWithValue("$fingerprint", batch.Fingerprint.ToArray());
+                    command.Parameters.AddWithValue(
+                        "$last_change_id",
+                        (object?)batch.LastAppliedChangeId ?? DBNull.Value);
                     command.Parameters.AddWithValue("$updated_at_ticks", ToUtcTicks(batch.UpdatedAt));
                     return await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                 },
@@ -855,7 +861,9 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 reader.GetInt32(3),
                 (CloudRemoteBatchStatus)reader.GetInt32(4),
                 ReadBytes(reader, 5),
-                FromUtcTicks(reader.GetInt64(6)));
+                FromUtcTicks(reader.GetInt64(8)),
+                ReadBytes(reader, 6),
+                reader.IsDBNull(7) ? null : reader.GetString(7));
     }
 
     private sealed class EchoSuppressionRepository : ICloudEchoSuppressionRepository

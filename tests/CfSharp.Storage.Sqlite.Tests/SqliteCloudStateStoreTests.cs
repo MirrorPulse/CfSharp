@@ -175,7 +175,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            1L,
+            2L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -183,7 +183,35 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
             1L,
             await ExecuteScalarInt64Async(
                 _databasePath,
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'items';"));
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'items';"));
+    }
+
+    [Fact]
+    public async Task VersionOneRemoteBatchSchemaMigratesToVersionTwo()
+    {
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        await ExecuteSqlAsync(
+            _databasePath,
+            "UPDATE cfsharp_schema SET version = 1 WHERE singleton = 1;");
+
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        Assert.Equal(
+            2L,
+            await ExecuteScalarInt64Async(
+                _databasePath,
+                "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
+        Assert.Equal(
+            2L,
+            await ExecuteScalarInt64Async(
+                _databasePath,
+                "SELECT COUNT(*) FROM pragma_table_info('remote_batches') " +
+                "WHERE name IN ('fingerprint', 'last_change_id');"));
     }
 
     [Fact]
@@ -196,7 +224,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
                 singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
                 version INTEGER NOT NULL
             );
-            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 2);
+            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 3);
             """);
 
         SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<

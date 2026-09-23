@@ -278,6 +278,7 @@ public sealed class CloudConflictState
 public sealed class CloudRemoteBatchState
 {
     private readonly byte[] _cursor;
+    private readonly byte[] _fingerprint;
     private readonly byte[] _payload;
 
     /// <summary>Initializes remote-batch progress and copies all opaque bytes.</summary>
@@ -288,7 +289,9 @@ public sealed class CloudRemoteBatchState
         int totalEntryCount,
         CloudRemoteBatchStatus status,
         ReadOnlySpan<byte> payload,
-        DateTimeOffset updatedAt)
+        DateTimeOffset updatedAt,
+        ReadOnlyMemory<byte> fingerprint = default,
+        string? lastAppliedChangeId = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(appliedEntryCount);
         ArgumentOutOfRangeException.ThrowIfNegative(totalEntryCount);
@@ -302,6 +305,15 @@ public sealed class CloudRemoteBatchState
 
         BatchId = CloudStateModelValidation.RequireText(batchId, nameof(batchId));
         _cursor = cursor.ToArray();
+        _fingerprint = fingerprint.ToArray();
+        if (lastAppliedChangeId is not null)
+        {
+            lastAppliedChangeId = CloudStateModelValidation.RequireText(
+                lastAppliedChangeId,
+                nameof(lastAppliedChangeId));
+        }
+
+        LastAppliedChangeId = lastAppliedChangeId;
         AppliedEntryCount = appliedEntryCount;
         TotalEntryCount = totalEntryCount;
         Status = CloudStateModelValidation.RequireDefined(status, nameof(status));
@@ -314,6 +326,15 @@ public sealed class CloudRemoteBatchState
 
     /// <summary>Gets the opaque remote cursor associated with durable progress.</summary>
     public ReadOnlyMemory<byte> Cursor => _cursor;
+
+    /// <summary>
+    /// Gets the deterministic fingerprint of the immutable remote batch, or empty for legacy
+    /// state created before remote-batch fingerprints were introduced.
+    /// </summary>
+    public ReadOnlyMemory<byte> Fingerprint => _fingerprint;
+
+    /// <summary>Gets the last durably completed entry identifier, when one has been applied.</summary>
+    public string? LastAppliedChangeId { get; }
 
     /// <summary>Gets the number of entries durably applied.</summary>
     public int AppliedEntryCount { get; }

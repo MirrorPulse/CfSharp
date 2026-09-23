@@ -13,11 +13,24 @@ public sealed class CloudStateModelTests
             null,
             bytes,
             DateTimeOffset.UtcNow);
+        CloudRemoteBatchState batch = new(
+            "batch",
+            bytes,
+            1,
+            1,
+            CloudRemoteBatchStatus.Applied,
+            bytes,
+            DateTimeOffset.UtcNow,
+            bytes,
+            "change-1");
 
         bytes[0] = 9;
 
         Assert.True(checkpoint.Value.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
         Assert.True(operation.Payload.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
+        Assert.True(batch.Cursor.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
+        Assert.True(batch.Fingerprint.Span.SequenceEqual(new byte[] { 1, 2, 3 }));
+        Assert.Equal("change-1", batch.LastAppliedChangeId);
     }
 
     [Fact]

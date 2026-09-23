@@ -349,7 +349,7 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
 
 internal static class SqliteSchema
 {
-    internal const int CurrentVersion = 1;
+    internal const int CurrentVersion = 2;
 
     internal static async Task InitializeAsync(
         string connectionString,
@@ -411,7 +411,13 @@ internal static class SqliteSchema
                     .ConfigureAwait(false);
             }
 
-            await ValidateVersionOneAsync(
+            if (version < 2)
+            {
+                await MigrateVersionTwoAsync(connection, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            await ValidateCurrentVersionAsync(
                 connection,
                 databasePath,
                 syncRootPath,
@@ -525,6 +531,8 @@ internal static class SqliteSchema
                 total_entry_count INTEGER NOT NULL,
                 status INTEGER NOT NULL,
                 payload BLOB NOT NULL,
+                fingerprint BLOB NOT NULL DEFAULT X'',
+                last_change_id TEXT NULL,
                 updated_at_ticks INTEGER NOT NULL
             );
 
@@ -543,12 +551,13 @@ internal static class SqliteSchema
             CREATE INDEX IF NOT EXISTS ix_echo_expiration ON echo_suppressions(expires_at_ticks);
 
             INSERT INTO cfsharp_schema(singleton, version, sync_root_path)
-            VALUES (1, 1, $sync_root_path)
+            VALUES (1, $version, $sync_root_path)
             ON CONFLICT(singleton) DO UPDATE SET
                 version = excluded.version,
                 sync_root_path = excluded.sync_root_path;
             """;
         command.Parameters.AddWithValue("$sync_root_path", syncRootPath);
+        command.Parameters.AddWithValue("$version", CurrentVersion);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -568,6 +577,48 @@ internal static class SqliteSchema
             syncRootPath,
             addSyncRootColumn: !syncRootColumnExists,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task MigrateVersionTwoAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "remote_batches", cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using SqliteTransaction transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!await ColumnExistsAsync(connection, "remote_batches", "fingerprint", cancellationToken)
+                .ConfigureAwait(false))
+        {
+            await using SqliteCommand addFingerprint = connection.CreateCommand();
+            addFingerprint.Transaction = transaction;
+            addFingerprint.CommandText =
+                "ALTER TABLE remote_batches ADD COLUMN fingerprint BLOB NOT NULL DEFAULT X'';";
+            await addFingerprint.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!await ColumnExistsAsync(connection, "remote_batches", "last_change_id", cancellationToken)
+                .ConfigureAwait(false))
+        {
+            await using SqliteCommand addLastChange = connection.CreateCommand();
+            addLastChange.Transaction = transaction;
+            addLastChange.CommandText =
+                "ALTER TABLE remote_batches ADD COLUMN last_change_id TEXT NULL;";
+            await addLastChange.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using SqliteCommand updateVersion = connection.CreateCommand();
+        updateVersion.Transaction = transaction;
+        updateVersion.CommandText =
+            "UPDATE cfsharp_schema SET version = $version WHERE singleton = 1;";
+        updateVersion.Parameters.AddWithValue("$version", CurrentVersion);
+        await updateVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnableWalAsync(
@@ -590,7 +641,7 @@ internal static class SqliteSchema
         }
     }
 
-    private static async Task ValidateVersionOneAsync(
+    private static async Task ValidateCurrentVersionAsync(
         SqliteConnection connection,
         string databasePath,
         string syncRootPath,
@@ -614,6 +665,23 @@ internal static class SqliteSchema
                     databasePath,
                     $"The CfSharp state database is missing the required '{table}' table.");
             }
+        }
+
+        if (!await ColumnExistsAsync(
+                connection,
+                "remote_batches",
+                "fingerprint",
+                cancellationToken).ConfigureAwait(false) ||
+            !await ColumnExistsAsync(
+                connection,
+                "remote_batches",
+                "last_change_id",
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new SqliteCloudStateStoreException(
+                SqliteCloudStateStoreError.InvalidSchema,
+                databasePath,
+                "The remote_batches table is missing Phase 8 replay columns.");
         }
 
         await using (SqliteCommand foreignKeyCommand = connection.CreateCommand())

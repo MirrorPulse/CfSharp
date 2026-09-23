@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.Data.Sqlite;
 
 namespace CfSharp.Storage.Sqlite;
@@ -129,6 +132,10 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
         string connectionString = CreateConnectionString();
         try
         {
+            // Re-check after opening the ownership sidecar. This closes the ordinary
+            // check-then-open window for parent/database/lock path substitutions; the
+            // lock itself is opened with FILE_FLAG_OPEN_REPARSE_POINT below.
+            ValidateSafeLocation(context.SyncRootPath);
             await SqliteSchema.InitializeAsync(
                 connectionString,
                 _busyTimeoutMilliseconds,
@@ -178,6 +185,18 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
                     SqliteCloudStateStoreError.InvalidPath,
                     "The SQLite database file cannot be a reparse point.");
             }
+
+            string lockPath = DatabasePath + ".cfsharp.lock";
+            if (File.Exists(lockPath) || Directory.Exists(lockPath))
+            {
+                FileAttributes attributes = File.GetAttributes(lockPath);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw CreateException(
+                        SqliteCloudStateStoreError.InvalidPath,
+                        "The SQLite ownership lock cannot be a reparse point.");
+                }
+            }
         }
         catch (SqliteCloudStateStoreException)
         {
@@ -198,13 +217,24 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
         string lockPath = DatabasePath + ".cfsharp.lock";
         try
         {
-            return new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                1,
-                FileOptions.Asynchronous | FileOptions.WriteThrough);
+            FileStream ownerLock = OpenOwnerLock(lockPath);
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(lockPath);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw CreateException(
+                        SqliteCloudStateStoreError.InvalidPath,
+                        "The SQLite ownership lock cannot be a reparse point.");
+                }
+
+                return ownerLock;
+            }
+            catch
+            {
+                ownerLock.Dispose();
+                throw;
+            }
         }
         catch (IOException exception)
         {
@@ -220,6 +250,37 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
                 "The SQLite ownership lock could not be opened.",
                 exception);
         }
+    }
+
+    private FileStream OpenOwnerLock(string lockPath)
+    {
+        SafeFileHandle handle = CreateFileW(
+            lockPath,
+            GenericRead | GenericWrite,
+            FileShareNone,
+            IntPtr.Zero,
+            OpenAlways,
+            FileFlagOpenReparsePoint | FileFlagWriteThrough,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            if (error is ErrorSharingViolation or ErrorLockViolation)
+            {
+                throw CreateException(
+                    SqliteCloudStateStoreError.AlreadyInUse,
+                    "The SQLite state database is already owned by another CfSharp instance.",
+                    new Win32Exception(error));
+            }
+
+            throw CreateException(
+                SqliteCloudStateStoreError.InvalidPath,
+                "The SQLite ownership lock could not be opened.",
+                new Win32Exception(error));
+        }
+
+        return new FileStream(handle, FileAccess.ReadWrite, bufferSize: 1, isAsync: false);
     }
 
     private string CreateConnectionString()
@@ -241,6 +302,25 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
         string message,
         Exception? innerException = null) =>
         new(error, DatabasePath, message, innerException);
+
+    private const uint GenericRead = 0x80000000;
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileShareNone = 0;
+    private const uint OpenAlways = 4;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileFlagWriteThrough = 0x80000000;
+    private const int ErrorSharingViolation = 32;
+    private const int ErrorLockViolation = 33;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
 }
 
 internal sealed class SqliteCloudStateStore : ICloudStateStore

@@ -125,6 +125,20 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         return (CloudProviderStatus)status;
     }
 
+    /// <summary>Updates the activity or terminal status reported for this provider connection.</summary>
+    /// <param name="status">Native-compatible activity flags or terminal status.</param>
+    /// <exception cref="ObjectDisposedException">The session is stopping or disposed.</exception>
+    /// <exception cref="CloudFilesException">Windows rejects the status update.</exception>
+    [SupportedOSPlatform("windows10.0.16299")]
+    public void UpdateStatus(CloudProviderStatus status)
+    {
+        ThrowIfStopping();
+        int result = CfApi.CfUpdateSyncProviderStatus(
+            _connectionKey,
+            (CfSyncProviderStatus)status);
+        ThrowIfFailed("CloudProviderSession.UpdateStatus", result);
+    }
+
     internal CfConnectionKey ConnectionKey
     {
         get

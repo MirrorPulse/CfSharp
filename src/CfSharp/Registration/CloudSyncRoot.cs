@@ -21,7 +21,7 @@ namespace CfSharp;
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class CloudSyncRoot
+public sealed partial class CloudSyncRoot
 {
     private const string MinimumWindowsVersion = "windows10.0.16299";
 

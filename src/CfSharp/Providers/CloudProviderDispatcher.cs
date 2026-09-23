@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 
 namespace CfSharp;
@@ -37,9 +38,12 @@ internal sealed class CloudProviderWorkItem
             return;
         }
 
+        Activity? activity = CloudDiagnostics.StartActivity("cfsharp.provider.work", Kind);
         try
         {
             await _handler(Cancellation.Token).ConfigureAwait(false);
+            CloudDiagnostics.StopActivity(activity, "completed");
+            activity = null;
         }
         catch (OperationCanceledException exception)
         {
@@ -55,15 +59,18 @@ internal sealed class CloudProviderWorkItem
 
             if (cancellationRequested)
             {
+                CloudDiagnostics.StopActivity(activity, "canceled");
                 _cancelled();
             }
             else
             {
+                CloudDiagnostics.StopActivity(activity, "failed");
                 _failed(exception);
             }
         }
         catch (Exception exception)
         {
+            CloudDiagnostics.StopActivity(activity, "failed");
             _failed(exception);
         }
     }
@@ -146,14 +153,17 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(workItem);
         if (Volatile.Read(ref _accepting) == 0 || Volatile.Read(ref _disposed) != 0)
         {
+            CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: false);
             return false;
         }
 
         if (_queue.Writer.TryWrite(workItem))
         {
+            CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: true);
             return true;
         }
 
+        CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: false);
         workItem.Cancel();
         return false;
     }

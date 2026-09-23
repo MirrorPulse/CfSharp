@@ -452,6 +452,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     {
         if (hresult < 0)
         {
+            CloudDiagnostics.RecordNativeFailure(operation);
             throw CloudFilesException.FromHResult(operation, path, hresult);
         }
     }

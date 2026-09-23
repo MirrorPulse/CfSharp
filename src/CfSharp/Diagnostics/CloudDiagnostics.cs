@@ -23,6 +23,71 @@ public static class CloudDiagnostics
     public static System.Diagnostics.Metrics.Meter Meter { get; } =
         new(MeterName, typeof(CloudDiagnostics).Assembly.GetName().Version?.ToString());
 
+    private static readonly System.Diagnostics.Metrics.Counter<long> WorkItemsEnqueued =
+        Meter.CreateCounter<long>("cfsharp.provider.work.enqueued");
+    private static readonly System.Diagnostics.Metrics.Counter<long> WorkItemsRejected =
+        Meter.CreateCounter<long>("cfsharp.provider.work.rejected");
+    private static readonly System.Diagnostics.Metrics.Counter<long> NativeFailures =
+        Meter.CreateCounter<long>("cfsharp.native.failures");
+
+    internal static Activity? StartActivity(string name, CloudProviderRequestKind kind)
+    {
+        try
+        {
+            Activity? activity = ActivitySource.StartActivity(name, ActivityKind.Internal);
+            activity?.SetTag("cfsharp.request.kind", kind.ToString());
+            return activity;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static void StopActivity(Activity? activity, string outcome)
+    {
+        if (activity is null)
+        {
+            return;
+        }
+
+        try
+        {
+            activity.SetTag("cfsharp.outcome", outcome);
+            activity.Stop();
+        }
+        catch
+        {
+            // Listener failures must never cross a provider or callback boundary.
+        }
+    }
+
+    internal static void RecordWorkItemEnqueued(CloudProviderRequestKind kind, bool accepted)
+    {
+        try
+        {
+            (accepted ? WorkItemsEnqueued : WorkItemsRejected).Add(
+                1,
+                new KeyValuePair<string, object?>("cfsharp.request.kind", kind.ToString()));
+        }
+        catch
+        {
+            // Meter listeners are diagnostic only.
+        }
+    }
+
+    internal static void RecordNativeFailure(string operation)
+    {
+        try
+        {
+            NativeFailures.Add(1, new KeyValuePair<string, object?>("cfsharp.operation", operation));
+        }
+        catch
+        {
+            // Meter listeners are diagnostic only.
+        }
+    }
+
     internal static void RecordException(Activity? activity, Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
@@ -41,4 +106,5 @@ public static class CloudDiagnostics
             // Diagnostics must never alter the primary operation result.
         }
     }
+
 }

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace CfSharp;
@@ -352,12 +353,19 @@ public sealed class CloudSynchronizedDirectoryPage
 
 internal static class CloudSynchronizedDirectoryCursor
 {
-    private const string Prefix = "cfsharp.synchronized-directory/v1|";
+    private const string Prefix = "cfsharp.synchronized-directory/v2|";
 
-    internal static ReadOnlyMemory<byte> Create(int offset) =>
-        Encoding.UTF8.GetBytes(Prefix + offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    internal static ReadOnlyMemory<byte> Create(int offset, ReadOnlySpan<byte> fingerprint) =>
+        Encoding.UTF8.GetBytes(
+            Prefix +
+            offset.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            "|" +
+            Convert.ToHexString(fingerprint));
 
-    internal static int Parse(ReadOnlySpan<byte> cursor, int maximum)
+    internal static int Parse(
+        ReadOnlySpan<byte> cursor,
+        int maximum,
+        ReadOnlySpan<byte> expectedFingerprint)
     {
         if (cursor.IsEmpty)
         {
@@ -365,18 +373,57 @@ internal static class CloudSynchronizedDirectoryCursor
         }
 
         string value = Encoding.UTF8.GetString(cursor);
+        int fingerprintSeparator = value.IndexOf('|', Prefix.Length);
         if (!value.StartsWith(Prefix, StringComparison.Ordinal) ||
+            fingerprintSeparator < Prefix.Length ||
             !int.TryParse(
-                value.AsSpan(Prefix.Length),
+                value.AsSpan(Prefix.Length, fingerprintSeparator - Prefix.Length),
                 System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out int offset) ||
             offset < 0 ||
-            offset > maximum)
+            offset > maximum ||
+            !string.Equals(
+                value[(fingerprintSeparator + 1)..],
+                Convert.ToHexString(expectedFingerprint),
+                StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("The synchronized-directory cursor is invalid.", nameof(cursor));
+            throw new ArgumentException(
+                "The synchronized-directory cursor is invalid or no longer matches the requested snapshot.",
+                nameof(cursor));
         }
 
         return offset;
+    }
+
+    internal static byte[] CreateFingerprint(
+        CloudSynchronizedDirectoryQuery query,
+        IReadOnlyList<CloudSynchronizedDirectoryEntry> entries)
+    {
+        StringBuilder builder = new();
+        builder.Append(query.RelativePath)
+            .Append('\0')
+            .Append(query.PageSize)
+            .Append('\0')
+            .Append((int)query.EntryKinds)
+            .Append('\0')
+            .Append(query.IncludeTombstones ? '1' : '0');
+        foreach (CloudSynchronizedDirectoryEntry entry in entries)
+        {
+            builder.Append('\0')
+                .Append(entry.RelativePath)
+                .Append('|')
+                .Append((int)entry.Kind)
+                .Append('|')
+                .Append(entry.DurableState?.ItemId.ToString("D") ?? string.Empty)
+                .Append('|')
+                .Append(entry.DurableState?.RemoteRevision ?? string.Empty)
+                .Append('|')
+                .Append(entry.IsMaterialized ? '1' : '0')
+                .Append('|')
+                .Append(entry.IsTombstone ? '1' : '0');
+        }
+
+        return SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
     }
 }

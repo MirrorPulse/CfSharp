@@ -200,6 +200,36 @@ public sealed class CloudFileSystemRemoteChangeTests
     }
 
     [Fact]
+    public async Task SynchronizedDirectoryCursorRejectsChangedSnapshot()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(rootPath, "a.txt"), "a");
+            await File.WriteAllTextAsync(Path.Combine(rootPath, "b.txt"), "b");
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+
+            CloudSynchronizedDirectoryPage first =
+                await fileSystem.ReadSynchronizedDirectoryPageAsync(
+                    new CloudSynchronizedDirectoryQuery(pageSize: 1));
+            Assert.False(first.IsComplete);
+
+            await File.WriteAllTextAsync(Path.Combine(rootPath, "c.txt"), "c");
+
+            await Assert.ThrowsAsync<ArgumentException>(() => fileSystem
+                .ReadSynchronizedDirectoryPageAsync(
+                    new CloudSynchronizedDirectoryQuery(
+                        pageSize: 1,
+                        continuationCursor: first.ContinuationCursor))
+                .AsTask());
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task RemoteBatchResumesPartialConflictResultsWithoutAdvancingPastSafeCursor()
     {
         string rootPath = CreateRoot();

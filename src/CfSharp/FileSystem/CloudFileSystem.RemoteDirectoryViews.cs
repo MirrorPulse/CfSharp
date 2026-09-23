@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CfSharp;
 
@@ -150,9 +152,11 @@ public sealed partial class CloudFileSystem
             .OrderBy(static entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static entry => entry.RelativePath, StringComparer.Ordinal)
             .ToList();
+        byte[] snapshotFingerprint = CloudSynchronizedDirectoryCursor.CreateFingerprint(query, ordered);
         int offset = CloudSynchronizedDirectoryCursor.Parse(
             query.ContinuationCursor.Span,
-            ordered.Count);
+            ordered.Count,
+            snapshotFingerprint);
         int count = Math.Min(query.PageSize, ordered.Count - offset);
         IReadOnlyList<CloudSynchronizedDirectoryEntry> pageEntries =
             new ReadOnlyCollection<CloudSynchronizedDirectoryEntry>(
@@ -161,7 +165,9 @@ public sealed partial class CloudFileSystem
         bool isComplete = nextOffset >= ordered.Count;
         return new CloudSynchronizedDirectoryPage(
             pageEntries,
-            isComplete ? ReadOnlyMemory<byte>.Empty : CloudSynchronizedDirectoryCursor.Create(nextOffset),
+            isComplete
+                ? ReadOnlyMemory<byte>.Empty
+                : CloudSynchronizedDirectoryCursor.Create(nextOffset, snapshotFingerprint),
             isComplete);
     }
 

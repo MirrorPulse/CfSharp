@@ -1,3 +1,5 @@
+using CfSharp.Native;
+
 namespace CfSharp.Tests;
 
 public sealed class CloudPhaseNineValueTests
@@ -15,6 +17,24 @@ public sealed class CloudPhaseNineValueTests
         Assert.False(CloudCorrelationVector.TryParse("2;\0bad", out _));
         Assert.Throws<ArgumentOutOfRangeException>(() => CloudCorrelationVector.Create(3, "value"));
         Assert.Throws<ArgumentException>(() => CloudCorrelationVector.Create(1, new string('x', 65)));
+    }
+
+    [Fact]
+    public unsafe void NativeCorrelationVectorRejectsLossyNonAsciiBytes()
+    {
+        CfCorrelationVector native = new() { Version = 1 };
+        native.Vector[0] = 0x80;
+        native.Vector[1] = 0;
+
+        try
+        {
+            _ = CloudCorrelationVector.FromNative(native);
+            Assert.Fail("Expected a non-ASCII native correlation vector to be rejected.");
+        }
+        catch (InvalidDataException)
+        {
+            // Expected: native bytes must not be decoded lossily.
+        }
     }
 
     [Fact]

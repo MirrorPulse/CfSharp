@@ -137,6 +137,12 @@ public readonly struct CloudCorrelationVector : IEquatable<CloudCorrelationVecto
             bytes[index] = native.Vector[index];
         }
 
+        if (bytes.Any(static value => value is < 0x20 or > 0x7F))
+        {
+            throw new InvalidDataException(
+                "Windows returned a correlation vector containing non-printable or non-ASCII bytes.");
+        }
+
         return new CloudCorrelationVector(native.Version, Encoding.ASCII.GetString(bytes));
     }
 

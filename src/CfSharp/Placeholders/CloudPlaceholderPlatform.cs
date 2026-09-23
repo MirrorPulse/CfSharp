@@ -29,6 +29,16 @@ internal sealed class CloudPlaceholderNativeBatchResult
 [SupportedOSPlatform("windows10.0.16299")]
 internal static class CloudPlaceholderPlatform
 {
+    private const int CloudFileUnsuccessfulHResult = unchecked((int)0x80070185);
+    private static readonly TimeSpan[] HydrationRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(10),
+        TimeSpan.FromMilliseconds(25),
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+    ];
+
     internal static unsafe CloudPlaceholderNativeBatchResult CreatePlaceholders(
         string baseDirectoryPath,
         IReadOnlyList<CloudPlaceholderSpec> specifications,
@@ -151,6 +161,28 @@ internal static class CloudPlaceholderPlatform
                 "CloudDirectory.CreatePlaceholders.Hydrate",
                 path,
                 hydrateResult);
+        }
+    }
+
+    internal static async ValueTask HydrateWithTransientRetryAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                Hydrate(path, cancellationToken);
+                return;
+            }
+            catch (CloudFilesException exception)
+                when (exception.HResult == CloudFileUnsuccessfulHResult &&
+                      attempt < HydrationRetryDelays.Length)
+            {
+                await Task.Delay(HydrationRetryDelays[attempt], cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
     }
 

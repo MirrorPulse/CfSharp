@@ -97,7 +97,10 @@ public sealed partial class CloudFileSystem
                     cancellationToken);
                 entry.Progress |= CloudPlaceholderCreationProgress.PinStateApplied;
                 cancellationToken.ThrowIfCancellationRequested();
-                CloudPlaceholderPlatform.Hydrate(entry.Path, cancellationToken);
+                await CloudPlaceholderPlatform.HydrateWithTransientRetryAsync(
+                        entry.Path,
+                        cancellationToken)
+                    .ConfigureAwait(false);
                 entry.Progress |= CloudPlaceholderCreationProgress.ContentHydrated;
             }
             catch (CloudFilesException exception)

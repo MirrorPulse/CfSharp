@@ -536,12 +536,29 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             try
             {
                 await _runtimeSession.DisposeAsync().ConfigureAwait(false);
-                _runtimeSession = null;
             }
             catch (Exception exception)
             {
                 (failures ??= []).Add(exception);
+                if (_runtimeSession is ICloudFileSystemRuntimeSessionDrain drain &&
+                    !drain.DisposeCompletion.IsCompleted)
+                {
+                    // A provider handler may still be using the state store after the native
+                    // connection has disconnected. Keep both resources owned until its deferred
+                    // completion releases callback state.
+                    return failures;
+                }
             }
+
+            if (_runtimeSession is ICloudFileSystemRuntimeSessionDrain completedDrain &&
+                !completedDrain.DisposeCompletion.IsCompleted)
+            {
+                (failures ??= []).Add(new TimeoutException(
+                    "The provider runtime is still draining callback work."));
+                return failures;
+            }
+
+            _runtimeSession = null;
         }
 
         if (_stateStore is not null)

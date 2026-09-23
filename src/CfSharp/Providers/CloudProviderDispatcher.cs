@@ -119,6 +119,8 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
     private readonly Task[] _workers;
     private readonly object _activeGate = new();
     private readonly HashSet<CloudProviderWorkItem> _active = [];
+    private readonly TaskCompletionSource<object?> _disposeCompletion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _accepting = 1;
     private int _disposed;
     private int _resourcesDisposed;
@@ -172,10 +174,13 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
 
     internal void StopAccepting() => Interlocked.Exchange(ref _accepting, 0);
 
+    internal Task DisposeCompletion => _disposeCompletion.Task;
+
     internal async ValueTask DisposeAsync(TimeSpan timeout)
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
+            await _disposeCompletion.Task.ConfigureAwait(false);
             return;
         }
 
@@ -351,5 +356,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         {
             limit.Dispose();
         }
+
+        _disposeCompletion.TrySetResult(null);
     }
 }

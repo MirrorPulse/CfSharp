@@ -15,6 +15,11 @@ internal interface ICloudFileSystemRuntimeSession : IAsyncDisposable
 {
 }
 
+internal interface ICloudFileSystemRuntimeSessionDrain
+{
+    Task DisposeCompletion { get; }
+}
+
 /// <summary>Optional runtime capability used by safe provider-initiated item leases.</summary>
 internal interface ICloudTransferRuntimeSession
 {
@@ -48,7 +53,8 @@ internal sealed class WindowsCloudFileSystemRuntime : ICloudFileSystemRuntime
     [SupportedOSPlatform("windows10.0.16299")]
     private sealed class WindowsCloudFileSystemRuntimeSession :
         ICloudFileSystemRuntimeSession,
-        ICloudTransferRuntimeSession
+        ICloudTransferRuntimeSession,
+        ICloudFileSystemRuntimeSessionDrain
     {
         private readonly CloudProviderSession? _providerSession;
 
@@ -60,6 +66,9 @@ internal sealed class WindowsCloudFileSystemRuntime : ICloudFileSystemRuntime
         CloudProviderSession ICloudTransferRuntimeSession.ProviderSession =>
             _providerSession ?? throw new InvalidOperationException(
                 "A content provider session is required for provider-initiated transfers.");
+
+        Task ICloudFileSystemRuntimeSessionDrain.DisposeCompletion =>
+            _providerSession?.DisposeCompletion ?? Task.CompletedTask;
 
         public ValueTask DisposeAsync() =>
             _providerSession?.DisposeAsync() ?? ValueTask.CompletedTask;

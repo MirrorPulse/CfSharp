@@ -19,8 +19,9 @@ namespace CfSharp;
 /// </para>
 /// <para>
 /// Disposal stops new provider dispatch, cancels active requests, drains cooperative handlers,
-/// disconnects from Windows, and only then releases callback memory. The persistent sync-root
-/// registration is not removed.
+/// disconnects from Windows, and only then releases callback memory. If a handler ignores the
+/// configured shutdown timeout, callback memory remains owned until that handler exits. The
+/// persistent sync-root registration is not removed.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
@@ -49,6 +50,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private long _notificationRegistryKey;
     private int _stopping;
     private int _disposed;
+    private int _nativeStateReleased;
+    private readonly TaskCompletionSource<object?> _disposeCompletion =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private CloudProviderSession(
         ICloudFileContentProvider contentProvider,
@@ -150,10 +154,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     /// <summary>Synchronously stops the provider session and releases its callback resources.</summary>
     /// <remarks>
-    /// This compatibility method blocks the calling thread while cooperative handlers drain,
-    /// for up to <see cref="CloudProviderSessionOptions.ShutdownTimeout"/>. Applications with a
-    /// UI or single-threaded synchronization context should call <see cref="DisposeAsync"/>
-    /// instead and await it. The asynchronous implementation does not capture that context.
+    /// This compatibility method blocks the calling thread while handlers drain. The configured
+    /// shutdown timeout controls cooperative cancellation; a handler that ignores cancellation
+    /// keeps callback memory and its state-store ownership alive until it exits. Applications
+    /// with a UI or single-threaded synchronization context should call <see cref="DisposeAsync"/>.
     /// </remarks>
     public void Dispose()
     {
@@ -167,6 +171,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
+            await _disposeCompletion.Task.ConfigureAwait(false);
             return;
         }
 
@@ -190,21 +195,68 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             }
         }
 
+        CloudProviderDispatcher? dispatcher = _dispatcher;
+        Exception? dispatcherFailure = null;
         try
         {
-            if (_dispatcher is not null)
+            if (dispatcher is not null)
             {
-                await _dispatcher.DisposeAsync(_options.ShutdownTimeout).ConfigureAwait(false);
+                await dispatcher.DisposeAsync(_options.ShutdownTimeout).ConfigureAwait(false);
             }
+        }
+        catch (Exception exception)
+        {
+            dispatcherFailure = exception;
+        }
+
+        int disconnectResult = CfApi.CfDisconnectSyncRoot(_connectionKey);
+        if (dispatcher is not null && !dispatcher.DisposeCompletion.IsCompleted)
+        {
+            _ = CompleteNativeDisposeAfterDispatcherAsync(dispatcher);
+            if (dispatcherFailure is not null)
+            {
+                throw dispatcherFailure;
+            }
+
+            throw new TimeoutException(
+                "Cloud provider handlers are still draining; callback state and the state store " +
+                "must remain owned until they finish.");
+        }
+
+        FinalizeNativeDispose();
+        if (dispatcherFailure is not null)
+        {
+            throw dispatcherFailure;
+        }
+
+        GC.SuppressFinalize(this);
+        ThrowIfFailed("CloudProviderSession.Dispose", disconnectResult);
+    }
+
+    internal Task DisposeCompletion => _disposeCompletion.Task;
+
+    private async Task CompleteNativeDisposeAfterDispatcherAsync(CloudProviderDispatcher dispatcher)
+    {
+        try
+        {
+            await dispatcher.DisposeCompletion.ConfigureAwait(false);
         }
         finally
         {
-            int disconnectResult = CfApi.CfDisconnectSyncRoot(_connectionKey);
-            ReleaseNativeState();
-            _shutdown.Dispose();
-            GC.SuppressFinalize(this);
-            ThrowIfFailed("CloudProviderSession.Dispose", disconnectResult);
+            FinalizeNativeDispose();
         }
+    }
+
+    private void FinalizeNativeDispose()
+    {
+        if (Interlocked.Exchange(ref _nativeStateReleased, 1) != 0)
+        {
+            return;
+        }
+
+        ReleaseNativeState();
+        _shutdown.Dispose();
+        _disposeCompletion.TrySetResult(null);
     }
 
     private unsafe void ConnectCore(string path)

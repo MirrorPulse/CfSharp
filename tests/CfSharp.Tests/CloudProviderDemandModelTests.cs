@@ -1,3 +1,5 @@
+using System.Runtime.Versioning;
+
 namespace CfSharp.Tests;
 
 public sealed class CloudProviderDemandModelTests
@@ -77,5 +79,32 @@ public sealed class CloudProviderDemandModelTests
 
         Assert.Equal([(1L, 10L), (10L, 10L)], reports);
         Assert.Throws<ArgumentOutOfRangeException>(() => reporter.Report(11, 10));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public void PlaceholderTransferValidationRequiresEveryEntryToSucceed()
+    {
+        CloudProviderSession.ValidatePlaceholderTransferResults([0, 0], 2, "root");
+
+        Assert.Throws<InvalidDataException>(() =>
+            CloudProviderSession.ValidatePlaceholderTransferResults([0, 0], 1, "root"));
+
+        CloudFilesException failure = Assert.Throws<CloudFilesException>(() =>
+            CloudProviderSession.ValidatePlaceholderTransferResults(
+                [0, unchecked((int)0x80070005)],
+                2,
+                "root"));
+        Assert.Equal("CloudProviderSession.TransferPlaceholders.Entry", failure.Operation);
+        Assert.Equal("root", failure.Path);
+        Assert.Equal(unchecked((int)0x80070005), failure.HResult);
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public void PlaceholderTransferValidationRejectsImpossibleProcessedCount()
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            CloudProviderSession.ValidatePlaceholderTransferResults([0], 2, "root"));
     }
 }

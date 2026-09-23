@@ -575,18 +575,19 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 stateTransaction = await _stateStore
                     .BeginTransactionAsync(_shutdown.Token)
                     .ConfigureAwait(false);
+            }
+
+            // Keep the durable transaction open across the native transfer, but only write the
+            // page after Windows reports that every entry was processed successfully. A native
+            // partial result therefore cannot publish mappings or a continuation for entries
+            // that Windows did not accept.
+            SendPlaceholders(activeRequest, page);
+            if (stateTransaction is not null)
+            {
                 await PersistDirectoryPageAsync(
                     request,
                     page,
                     stateTransaction).ConfigureAwait(false);
-            }
-
-            // Keep the durable transaction open across the native transfer. A native failure
-            // therefore rolls back the page mappings and checkpoint instead of publishing a
-            // durable continuation for a page Windows did not accept.
-            SendPlaceholders(activeRequest, page);
-            if (stateTransaction is not null)
-            {
                 await stateTransaction.CommitAsync(_shutdown.Token).ConfigureAwait(false);
             }
 
@@ -1578,6 +1579,16 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 };
                 int result = CfApi.CfExecute(&operationInfo, &parameters);
                 ThrowIfFailed("CloudProviderSession.TransferPlaceholders", result);
+                int[] entryResults = new int[entries.Length];
+                for (int index = 0; index < entries.Length; index++)
+                {
+                    entryResults[index] = entries[index].Result;
+                }
+
+                ValidatePlaceholderTransferResults(
+                    entryResults,
+                    parameters.TransferPlaceholders.EntriesProcessed,
+                    request.Request.NormalizedPath);
             }
         }
         finally
@@ -1586,6 +1597,37 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             {
                 pinned[index].Free();
             }
+        }
+    }
+
+    internal static void ValidatePlaceholderTransferResults(
+        ReadOnlySpan<int> entryResults,
+        uint entriesProcessed,
+        string? path)
+    {
+        if (entriesProcessed > entryResults.Length)
+        {
+            throw new InvalidDataException(
+                $"Windows returned {entriesProcessed} processed placeholder entries for a " +
+                $"batch containing {entryResults.Length} entries.");
+        }
+
+        for (int index = 0; index < entriesProcessed; index++)
+        {
+            int entryResult = entryResults[index];
+            if (entryResult < 0)
+            {
+                throw CloudFilesException.FromHResult(
+                    "CloudProviderSession.TransferPlaceholders.Entry",
+                    path,
+                    entryResult);
+            }
+        }
+
+        if (entriesProcessed != entryResults.Length)
+        {
+            throw new InvalidDataException(
+                $"Windows processed {entriesProcessed} of {entryResults.Length} placeholder entries.");
         }
     }
 

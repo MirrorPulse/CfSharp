@@ -83,6 +83,50 @@ public sealed class CloudFileSystemRemoteChangeTests
         }
     }
 
+    [Fact]
+    public async Task DurableConflictEnvelopeCanBeReadAndDeferred()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            await using CloudFileSystem fileSystem = await StartAsync(rootPath);
+            CloudRemoteChange move = new(
+                "move-round-trip",
+                CloudRemoteChangeKind.Move,
+                "remote-file",
+                "revision-2",
+                CloudItemKind.File,
+                "new.txt",
+                previousRelativePath: "old.txt",
+                metadata: CloudPlaceholderMetadata.CreateFileBuilder()
+                    .WithAttributes(FileAttributes.ReadOnly)
+                    .WithLastWriteTime(DateTimeOffset.UtcNow.AddMinutes(-1))
+                    .Build());
+            CloudRemoteChangeBatch batch = new(
+                "batch-round-trip",
+                Array.Empty<byte>(),
+                [move],
+                new byte[] { 7 });
+
+            CloudRemoteApplyResult applied = await fileSystem.ApplyRemoteChangesAsync(batch);
+            Guid conflictId = Assert.Single(applied.ConflictIds);
+
+            CloudRemoteApplyEntryResult deferred = await fileSystem.ResolveRemoteConflictAsync(
+                conflictId,
+                new CloudRemoteConflictResolution(CloudRemoteConflictDecision.Defer));
+            Assert.Equal(CloudRemoteApplyEntryStatus.Conflict, deferred.Status);
+            Assert.NotNull(deferred.Conflict);
+            Assert.Equal(move.ChangeId, deferred.Conflict!.Change.ChangeId);
+            Assert.Equal(move.RelativePath, deferred.Conflict.Change.RelativePath);
+            Assert.Equal(move.Metadata!.Attributes, deferred.Conflict.Change.Metadata!.Attributes);
+            Assert.Equal(CloudRemoteConflictReason.MissingItem, deferred.Conflict.Reason);
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
     private static async Task<CloudFileSystem> StartAsync(string rootPath)
     {
         CloudFileSystem fileSystem = CloudFileSystem

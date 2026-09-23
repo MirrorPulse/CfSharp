@@ -1,10 +1,11 @@
 using System.Text;
+using System.Text.Json;
 
 namespace CfSharp;
 
 public sealed partial class CloudFileSystem
 {
-    private const string RemoteConflictPayloadPrefix = "cfsharp.remote-conflict/v1|";
+    private const int RemoteConflictEnvelopeVersion = 1;
 
     /// <summary>
     /// Applies an immutable application-supplied remote change batch to this sync root.
@@ -157,6 +158,79 @@ public sealed partial class CloudFileSystem
         return CreateRemoteApplyResult(progress, results, requiresRetry, conflictIds);
     }
 
+    /// <summary>
+    /// Resolves one durable remote conflict after an earlier batch recorded it safely.
+    /// </summary>
+    /// <param name="conflictId">Stable identifier returned by a remote apply result.</param>
+    /// <param name="resolution">Explicit keep-local, keep-remote, keep-both, or defer decision.</param>
+    /// <param name="cancellationToken">Token observed before durable and native work.</param>
+    /// <returns>The resulting entry status. A deferred decision leaves the conflict durable.</returns>
+    /// <exception cref="KeyNotFoundException">The conflict no longer exists.</exception>
+    /// <exception cref="InvalidDataException">The durable conflict envelope is corrupt.</exception>
+    public async ValueTask<CloudRemoteApplyEntryResult> ResolveRemoteConflictAsync(
+        Guid conflictId,
+        CloudRemoteConflictResolution resolution,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        if (conflictId == Guid.Empty)
+        {
+            throw new ArgumentException("The conflict identifier cannot be empty.", nameof(conflictId));
+        }
+
+        ArgumentNullException.ThrowIfNull(resolution);
+        (CloudRemoteConflict conflict, CloudConflictState durableState) =
+            await ReadRemoteConflictAsync(conflictId, cancellationToken).ConfigureAwait(false);
+        if (resolution.Decision is CloudRemoteConflictDecision.Defer or
+            CloudRemoteConflictDecision.KeepLocal)
+        {
+            return new CloudRemoteApplyEntryResult(
+                conflict.Change.ChangeId,
+                CloudRemoteApplyEntryStatus.Conflict,
+                conflict);
+        }
+
+        if (resolution.Decision is CloudRemoteConflictDecision.KeepBoth &&
+            (conflict.Change.Kind is not CloudRemoteChangeKind.FileUpsert and
+             not CloudRemoteChangeKind.DirectoryUpsert))
+        {
+            return new CloudRemoteApplyEntryResult(
+                conflict.Change.ChangeId,
+                CloudRemoteApplyEntryStatus.Conflict,
+                conflict);
+        }
+
+        CloudRemoteChange retry = resolution.Decision is CloudRemoteConflictDecision.KeepBoth
+            ? CreateConflictCopyChange(conflict.Change, resolution.KeepBothRelativePath!)
+            : CreateForceApplyChange(conflict.Change);
+        RemoteEntryOutcome outcome = await ApplyRemoteEntryCoreAsync(
+                retry,
+                CloudRemoteApplyOptions.Default with
+                {
+                    PreserveUnsynchronizedLocalContent = false,
+                    ConflictResolver = null,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (outcome.Status is not CloudRemoteApplyEntryStatus.Applied)
+        {
+            return new CloudRemoteApplyEntryResult(
+                conflict.Change.ChangeId,
+                outcome.Status,
+                outcome.Conflict);
+        }
+
+        await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
+                "The cloud file system has no open state store.")).BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.Conflicts.RemoveAsync(durableState.ConflictId, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new CloudRemoteApplyEntryResult(
+            conflict.Change.ChangeId,
+            CloudRemoteApplyEntryStatus.Applied);
+    }
+
     private async ValueTask<CloudRemoteBatchState> ReadOrInitializeRemoteBatchAsync(
         CloudRemoteChangeBatch batch,
         CancellationToken cancellationToken)
@@ -236,6 +310,52 @@ public sealed partial class CloudFileSystem
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
+        RemoteEntryOutcome outcome = await ApplyRemoteEntryCoreAsync(
+                change,
+                options,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (outcome.Conflict is null || options.ConflictResolver is null)
+        {
+            return outcome;
+        }
+
+        CloudRemoteConflictResolution resolution = await options.ConflictResolver
+            .ResolveAsync(outcome.Conflict, cancellationToken)
+            .ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(resolution);
+        if (resolution.Decision is CloudRemoteConflictDecision.Defer or
+            CloudRemoteConflictDecision.KeepLocal)
+        {
+            return outcome;
+        }
+
+        if (resolution.Decision is CloudRemoteConflictDecision.KeepBoth &&
+            (change.Kind is not CloudRemoteChangeKind.FileUpsert and
+             not CloudRemoteChangeKind.DirectoryUpsert))
+        {
+            return outcome;
+        }
+
+        CloudRemoteChange retry = resolution.Decision is CloudRemoteConflictDecision.KeepBoth
+            ? CreateConflictCopyChange(change, resolution.KeepBothRelativePath!)
+            : CreateForceApplyChange(change);
+        return await ApplyRemoteEntryCoreAsync(
+                retry,
+                options with
+                {
+                    PreserveUnsynchronizedLocalContent = false,
+                    ConflictResolver = null,
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<RemoteEntryOutcome> ApplyRemoteEntryCoreAsync(
+        CloudRemoteChange change,
+        CloudRemoteApplyOptions options,
+        CancellationToken cancellationToken)
+    {
         RemoteEntryContext context = await ReadRemoteEntryContextAsync(change, cancellationToken)
             .ConfigureAwait(false);
         if (change.Kind is CloudRemoteChangeKind.Move)
@@ -281,7 +401,8 @@ public sealed partial class CloudFileSystem
 
         bool upsert = change.Kind is CloudRemoteChangeKind.FileUpsert or
             CloudRemoteChangeKind.DirectoryUpsert;
-        if (context.LocalState is not null && context.LocalOperations.Count != 0)
+        if (options.PreserveUnsynchronizedLocalContent &&
+            context.LocalState is not null && context.LocalOperations.Count != 0)
         {
             return RemoteEntryOutcome.ConflictResult(CreateConflict(
                 change,
@@ -747,6 +868,38 @@ public sealed partial class CloudFileSystem
         CloudRemoteConflictReason reason) =>
         new(change, localState, reason, DateTimeOffset.UtcNow);
 
+    private static CloudRemoteChange CreateForceApplyChange(CloudRemoteChange change) =>
+        new(
+            change.ChangeId,
+            change.Kind,
+            change.RemoteId,
+            change.RemoteRevision,
+            change.ItemKind,
+            change.RelativePath,
+            change.ItemId,
+            previousRemoteRevision: null,
+            change.PreviousRelativePath,
+            change.Length,
+            change.Metadata,
+            change.CursorAfter);
+
+    private static CloudRemoteChange CreateConflictCopyChange(
+        CloudRemoteChange change,
+        string relativePath) =>
+        new(
+            change.ChangeId + ":keep-both",
+            change.Kind,
+            "cfsharp-conflict-" + Guid.NewGuid().ToString("N"),
+            change.RemoteRevision,
+            change.ItemKind,
+            relativePath,
+            Guid.NewGuid(),
+            previousRemoteRevision: null,
+            previousRelativePath: null,
+            change.Length,
+            change.Metadata,
+            change.CursorAfter);
+
     private async ValueTask<CloudRemoteBatchState> PersistRemoteBatchOutcomeAsync(
         CloudRemoteChangeBatch batch,
         CloudRemoteBatchState previous,
@@ -826,11 +979,149 @@ public sealed partial class CloudFileSystem
             progress.AppliedEntryCount,
             conflictIds);
 
-    private static byte[] EncodeConflict(CloudRemoteConflict conflict) =>
-        Encoding.UTF8.GetBytes(
-            $"{RemoteConflictPayloadPrefix}{conflict.Change.ChangeId}|" +
-            $"{conflict.Change.RemoteId}|{conflict.Change.RemoteRevision}|" +
-            $"{conflict.Reason}|{conflict.Change.RelativePath}");
+    private async ValueTask<(CloudRemoteConflict Conflict, CloudConflictState DurableState)>
+        ReadRemoteConflictAsync(Guid conflictId, CancellationToken cancellationToken)
+    {
+        await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
+                "The cloud file system has no open state store.")).BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        CloudConflictState? durableState = await transaction.Conflicts
+            .GetAsync(conflictId, cancellationToken)
+            .ConfigureAwait(false);
+        if (durableState is null)
+        {
+            throw new KeyNotFoundException($"Remote conflict '{conflictId}' was not found.");
+        }
+
+        CloudRemoteChange change;
+        CloudRemoteConflictReason reason;
+        try
+        {
+            RemoteConflictEnvelope envelope = JsonSerializer.Deserialize<RemoteConflictEnvelope>(
+                    durableState.Payload.Span)
+                ?? throw new InvalidDataException("The durable remote conflict envelope is empty.");
+            if (envelope.Version != RemoteConflictEnvelopeVersion)
+            {
+                throw new InvalidDataException(
+                    $"The durable remote conflict envelope version '{envelope.Version}' is unsupported.");
+            }
+
+            if (envelope.CursorAfter is null)
+            {
+                throw new InvalidDataException("The durable remote conflict cursor is missing.");
+            }
+
+            reason = (CloudRemoteConflictReason)envelope.Reason;
+            if (!Enum.IsDefined(reason))
+            {
+                throw new InvalidDataException("The durable remote conflict reason is invalid.");
+            }
+
+            change = new CloudRemoteChange(
+                envelope.ChangeId ?? throw new InvalidDataException("The conflict change id is missing."),
+                (CloudRemoteChangeKind)envelope.Kind,
+                envelope.RemoteId ?? throw new InvalidDataException("The conflict remote id is missing."),
+                envelope.RemoteRevision ?? throw new InvalidDataException(
+                    "The conflict remote revision is missing."),
+                (CloudItemKind)envelope.ItemKind,
+                envelope.RelativePath ?? throw new InvalidDataException(
+                    "The conflict relative path is missing."),
+                envelope.ItemId,
+                envelope.PreviousRemoteRevision,
+                envelope.PreviousRelativePath,
+                envelope.Length,
+                DecodeMetadata(envelope.Metadata),
+                envelope.CursorAfter);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("The durable remote conflict envelope is invalid JSON.", exception);
+        }
+        catch (NotSupportedException exception)
+        {
+            throw new InvalidDataException("The durable remote conflict envelope is unsupported.", exception);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException("The durable remote conflict envelope is invalid.", exception);
+        }
+
+        CloudItemState? localState = durableState.ItemId is Guid itemId
+            ? await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false)
+            : null;
+        CloudRemoteConflict conflict = new(change, localState, reason, durableState.CreatedAt);
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+        return (conflict, durableState);
+    }
+
+    private static CloudPlaceholderMetadata? DecodeMetadata(RemoteMetadataEnvelope? metadata)
+    {
+        if (metadata is null)
+        {
+            return null;
+        }
+
+        CloudItemKind kind = (CloudItemKind)metadata.Kind;
+        CloudPlaceholderMetadata.Builder builder = kind is CloudItemKind.Directory
+            ? CloudPlaceholderMetadata.CreateDirectoryBuilder()
+            : CloudPlaceholderMetadata.CreateFileBuilder();
+        builder.WithAttributes((FileAttributes)metadata.Attributes);
+        if (metadata.CreationTimeUtcTicks is long creationTime)
+        {
+            builder.WithCreationTime(ToUtcDateTimeOffset(creationTime));
+        }
+
+        if (metadata.LastAccessTimeUtcTicks is long lastAccessTime)
+        {
+            builder.WithLastAccessTime(ToUtcDateTimeOffset(lastAccessTime));
+        }
+
+        if (metadata.LastWriteTimeUtcTicks is long lastWriteTime)
+        {
+            builder.WithLastWriteTime(ToUtcDateTimeOffset(lastWriteTime));
+        }
+
+        if (metadata.ChangeTimeUtcTicks is long changeTime)
+        {
+            builder.WithChangeTime(ToUtcDateTimeOffset(changeTime));
+        }
+
+        return builder.Build();
+    }
+
+    private static DateTimeOffset ToUtcDateTimeOffset(long ticks) =>
+        new(new DateTime(ticks, DateTimeKind.Utc));
+
+    private static byte[] EncodeConflict(CloudRemoteConflict conflict)
+    {
+        CloudRemoteChange change = conflict.Change;
+        CloudPlaceholderMetadata? metadata = change.Metadata;
+        RemoteMetadataEnvelope? metadataEnvelope = metadata is null
+            ? null
+            : new(
+                (int)metadata.Kind,
+                (int)metadata.Attributes,
+                metadata.CreationTime?.UtcTicks,
+                metadata.LastAccessTime?.UtcTicks,
+                metadata.LastWriteTime?.UtcTicks,
+                metadata.ChangeTime?.UtcTicks);
+        RemoteConflictEnvelope envelope = new(
+            RemoteConflictEnvelopeVersion,
+            change.ChangeId,
+            (int)change.Kind,
+            change.RemoteId,
+            change.RemoteRevision,
+            change.PreviousRemoteRevision,
+            change.ItemId,
+            (int)change.ItemKind,
+            change.RelativePath,
+            change.PreviousRelativePath,
+            change.Length,
+            metadataEnvelope,
+            change.CursorAfter.ToArray(),
+            (int)conflict.Reason);
+        return JsonSerializer.SerializeToUtf8Bytes(envelope);
+    }
 
     private static CloudStateConflictKind ToDurableConflictKind(CloudRemoteConflictReason reason) =>
         reason switch
@@ -840,6 +1131,30 @@ public sealed partial class CloudFileSystem
             CloudRemoteConflictReason.Delete => CloudStateConflictKind.Delete,
             _ => CloudStateConflictKind.Metadata,
         };
+
+    private sealed record RemoteConflictEnvelope(
+        int Version,
+        string? ChangeId,
+        int Kind,
+        string? RemoteId,
+        string? RemoteRevision,
+        string? PreviousRemoteRevision,
+        Guid? ItemId,
+        int ItemKind,
+        string? RelativePath,
+        string? PreviousRelativePath,
+        long? Length,
+        RemoteMetadataEnvelope? Metadata,
+        byte[]? CursorAfter,
+        int Reason);
+
+    private sealed record RemoteMetadataEnvelope(
+        int Kind,
+        int Attributes,
+        long? CreationTimeUtcTicks,
+        long? LastAccessTimeUtcTicks,
+        long? LastWriteTimeUtcTicks,
+        long? ChangeTimeUtcTicks);
 
     private sealed record RemoteEntryContext(
         CloudItemState? LocalState,

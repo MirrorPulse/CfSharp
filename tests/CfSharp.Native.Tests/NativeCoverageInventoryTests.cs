@@ -14,6 +14,8 @@ public sealed class NativeCoverageInventoryTests
     private const int ExpectedMappedFunctionCount = 36;
     private const string ExpectedPinnedHeaderSymbolFingerprint =
         "086596e9d2d29e29ad58c7803cc02d0070ad8a31510fc6b605de453ef30fc70c";
+    private static readonly string[] ValidRoutes =
+        ["HighLevelPublic", "HighLevelInternal", "NativeOnlyDocumented"];
 
     [Fact]
     public void InventoryTracksPinnedHeaderAndCurrentCoverage()
@@ -42,6 +44,16 @@ public sealed class NativeCoverageInventoryTests
             root.GetProperty("versionOverrides").GetProperty("CF_SYNC_STATUS").GetString());
         Assert.Equal(4, root.GetProperty("capabilityGates").GetArrayLength());
 
+        JsonElement routeMetadata = root.GetProperty("routeMetadata");
+        Assert.Equal("HighLevelInternal", routeMetadata.GetProperty("defaultRoute").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(routeMetadata.GetProperty("documentation").GetString()));
+        JsonElement nativeOnlyRoute = routeMetadata
+            .GetProperty("routes")
+            .GetProperty("CfGetPlaceholderRangeInfoForHydration");
+        Assert.Equal("NativeOnlyDocumented", nativeOnlyRoute.GetProperty("route").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(nativeOnlyRoute.GetProperty("reason").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(nativeOnlyRoute.GetProperty("nativeDocumentation").GetString()));
+
         JsonElement[] entries = symbols.EnumerateArray().ToArray();
         Assert.Equal(ExpectedSymbolCount, entries.Length);
         Assert.Equal(ExpectedFunctionCount, entries.Count(IsFunction));
@@ -65,6 +77,12 @@ public sealed class NativeCoverageInventoryTests
             {
                 Assert.Equal(JsonValueKind.Null, managedSymbol.ValueKind);
             }
+
+            string nativeName = GetNativeName(entry);
+            string route = routeMetadata.GetProperty("routes").TryGetProperty(nativeName, out JsonElement overrideRoute)
+                ? overrideRoute.GetProperty("route").GetString()!
+                : routeMetadata.GetProperty("defaultRoute").GetString()!;
+            Assert.Contains(route, ValidRoutes);
         }
 
         Assert.All(entries, entry => Assert.Equal("mapped", entry.GetProperty("status").GetString()));

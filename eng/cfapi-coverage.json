@@ -18,6 +18,19 @@
     { "nativeName": "CF_CONVERT_FLAG_FORCE_CONVERT_TO_CLOUD_FILE", "minimumIntegrationNumber": 1280 },
     { "nativeName": "CfGetPlaceholderRangeInfoForHydration", "minimumIntegrationNumber": 1536 }
   ],
+  "routeMetadata": {
+    "defaultRoute": "HighLevelInternal",
+    "documentation": "draft/design/phase-9-advanced-safe-coverage.md",
+    "routes": {
+      "CfGetPlaceholderRangeInfoForHydration": {
+        "route": "NativeOnlyDocumented",
+        "minimumWindowsVersion": "10.0.16299",
+        "minimumIntegrationNumber": 1536,
+        "reason": "Requires callback or provider-owned connection/transfer/file identifiers; no safe standalone high-level lease contract.",
+        "nativeDocumentation": "draft/docs/sdk-api/nf-cfapi-cfgetplaceholderrangeinfoforhydration.md"
+      }
+    }
+  },
   "symbols": [
     { "nativeName": "CfCloseHandle", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfCloseHandle" },
     { "nativeName": "CfConnectSyncRoot", "kind": "function", "status": "mapped", "managedSymbol": "CfSharp.Native.CfApi.CfConnectSyncRoot" },

@@ -860,7 +860,7 @@ public sealed partial class CloudFileSystem
     }
 
     private string ToFullPath(string relativePath) =>
-        Path.Combine(SyncRootPath, relativePath);
+        CloudItemPathResolver.Resolve(SyncRootPath, relativePath, allowRoot: false).FullPath;
 
     private async ValueTask UpdateRemoteItemRevisionAsync(
         Guid itemId,

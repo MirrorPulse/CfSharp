@@ -95,6 +95,17 @@ public sealed partial class CloudFileSystem
         Dictionary<string, CloudItemState> stateByPath = new(StringComparer.OrdinalIgnoreCase);
         foreach (CloudItemState state in durableItems)
         {
+            try
+            {
+                _ = CloudItemPathResolver.Resolve(SyncRootPath, state.RelativePath, allowRoot: false);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidDataException(
+                    $"Durable state contains an unsafe synchronized path '{state.RelativePath}'.",
+                    exception);
+            }
+
             if (!IsImmediateChild(query.RelativePath, state.RelativePath))
             {
                 continue;

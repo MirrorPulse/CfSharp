@@ -66,7 +66,11 @@ public sealed class CloudAdvancedCoverageTests
             CloudCorrelationVector requestedVector = CloudCorrelationVector.Create(1, "phase9-test");
             {
                 await using CloudItemLease lease = await file.AcquireLeaseAsync(
-                    CloudItemLeaseOptions.ExclusiveWrite);
+                    new CloudItemLeaseOptions
+                    {
+                        Access = CloudItemLeaseAccess.Read | CloudItemLeaseAccess.Write,
+                        Foreground = true,
+                    });
                 CloudCorrelationVector? initialVector = lease.GetCorrelationVector();
                 if (initialVector is not null)
                 {

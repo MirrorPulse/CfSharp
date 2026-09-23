@@ -31,4 +31,19 @@ public sealed class CloudTransferValueTests
         Assert.False(result.Entries[1].IsSuccessful);
         Assert.False(result.Entries[2].IsProcessed);
     }
+
+    [Fact]
+    public void TransferValidationExceptionPreservesOperationAndPath()
+    {
+        IOException inner = new("metadata unavailable");
+        CloudTransferValidationException exception = new(
+            "CloudTransfer.RangeValidation",
+            "C:\\sync\\file.bin",
+            "The item length could not be read.",
+            inner);
+
+        Assert.Equal("CloudTransfer.RangeValidation", exception.Operation);
+        Assert.Equal("C:\\sync\\file.bin", exception.Path);
+        Assert.Same(inner, exception.InnerException);
+    }
 }

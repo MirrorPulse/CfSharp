@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security;
 
 using CfSharp.Native;
 
@@ -63,6 +64,28 @@ public enum CloudTransferFailure
 
 /// <summary>Returns the amount and terminal status retrieved from a placeholder.</summary>
 public readonly record struct CloudTransferReadResult(int BytesRead, NtStatus CompletionStatus);
+
+/// <summary>Reports a local preflight failure before a proactive transfer reaches Windows.</summary>
+public sealed class CloudTransferValidationException : Exception
+{
+    /// <summary>Initializes a transfer validation failure with operation and item context.</summary>
+    public CloudTransferValidationException(
+        string operation,
+        string path,
+        string message,
+        Exception innerException)
+        : base(message, innerException)
+    {
+        Operation = operation;
+        Path = path;
+    }
+
+    /// <summary>Gets the managed transfer operation that failed preflight.</summary>
+    public string Operation { get; }
+
+    /// <summary>Gets the item path whose metadata could not be read.</summary>
+    public string Path { get; }
+}
 
 /// <summary>Describes the native result for one entry in a proactive placeholder transfer.</summary>
 /// <param name="Index">Zero-based index in the submitted placeholder list.</param>
@@ -527,9 +550,19 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         {
             logicalLength = new FileInfo(_lease.Item.FullPath).Length;
         }
-        catch (FileNotFoundException)
+        catch (Exception exception) when (
+            exception is FileNotFoundException or DirectoryNotFoundException)
         {
             // The native call below reports the authoritative lifetime failure.
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            throw new CloudTransferValidationException(
+                "CloudTransfer.RangeValidation",
+                _lease.Item.FullPath,
+                "The item length could not be read before validating the transfer range.",
+                exception);
         }
 
         bool reachesEndOfFile = logicalLength > 0 && end >= logicalLength;

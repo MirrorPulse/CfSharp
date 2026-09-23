@@ -64,6 +64,53 @@ public enum CloudTransferFailure
 /// <summary>Returns the amount and terminal status retrieved from a placeholder.</summary>
 public readonly record struct CloudTransferReadResult(int BytesRead, NtStatus CompletionStatus);
 
+/// <summary>Describes the native result for one entry in a proactive placeholder transfer.</summary>
+/// <param name="Index">Zero-based index in the submitted placeholder list.</param>
+/// <param name="IsProcessed">Whether Windows reported that the entry was processed.</param>
+/// <param name="NativeResult">The entry HRESULT, or <see langword="null"/> when unprocessed.</param>
+public readonly record struct CloudTransferPlaceholderEntryResult(
+    int Index,
+    bool IsProcessed,
+    int? NativeResult)
+{
+    /// <summary>Gets whether Windows processed this entry successfully.</summary>
+    public bool IsSuccessful => IsProcessed && NativeResult is >= 0;
+}
+
+/// <summary>Returns structured per-entry results from a proactive placeholder transfer.</summary>
+public sealed class CloudTransferPlaceholderBatchResult
+{
+    /// <summary>Initializes a result and takes a defensive copy of its entries.</summary>
+    /// <param name="entries">One result for every submitted placeholder, in submission order.</param>
+    public CloudTransferPlaceholderBatchResult(
+        IReadOnlyList<CloudTransferPlaceholderEntryResult> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        Entries = entries.ToArray();
+        if (Entries.Any(entry => entry.Index < 0 || entry.Index >= Entries.Count) ||
+            Entries.Select(entry => entry.Index).Distinct().Count() != Entries.Count)
+        {
+            throw new ArgumentException(
+                "Placeholder transfer result indexes must be unique and contiguous.",
+                nameof(entries));
+        }
+
+        EntriesProcessed = Entries.Count(static entry => entry.IsProcessed);
+    }
+
+    /// <summary>Gets one result for every submitted placeholder, in submission order.</summary>
+    public IReadOnlyList<CloudTransferPlaceholderEntryResult> Entries { get; }
+
+    /// <summary>Gets the number of entries Windows reported as processed.</summary>
+    public int EntriesProcessed { get; }
+
+    /// <summary>Gets whether every submitted entry was processed.</summary>
+    public bool IsComplete => EntriesProcessed == Entries.Count;
+
+    /// <summary>Gets whether every processed entry completed successfully.</summary>
+    public bool IsSuccessful => IsComplete && Entries.All(static entry => entry.IsSuccessful);
+}
+
 /// <summary>Owns one provider-initiated Cloud Files transfer key.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
@@ -259,7 +306,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
 
     /// <summary>Transfers a bounded page of child placeholders into a directory placeholder.</summary>
     /// <remarks>The owning directory lease must include write access.</remarks>
-    public ValueTask TransferPlaceholdersAsync(
+    public ValueTask<CloudTransferPlaceholderBatchResult> TransferPlaceholdersAsync(
         IReadOnlyList<CloudPlaceholderSpec> children,
         CloudPlaceholderBatchOptions? options = null,
         CancellationToken cancellationToken = default)
@@ -343,22 +390,22 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
                     throw new InvalidDataException("Windows returned an invalid placeholder processed count.");
                 }
 
-                for (int index = 0; index < processed; index++)
+                CloudTransferPlaceholderEntryResult[] results =
+                    new CloudTransferPlaceholderEntryResult[nativeEntries.Length];
+                for (int index = 0; index < nativeEntries.Length; index++)
                 {
-                    if (nativeEntries[index].Result < 0)
-                    {
-                        throw CloudFilesException.FromHResult(
-                            "CloudTransfer.TransferPlaceholders.Entry",
-                            _lease.Item.FullPath,
-                            nativeEntries[index].Result);
-                    }
+                    results[index] = index < processed
+                        ? new CloudTransferPlaceholderEntryResult(
+                            index,
+                            IsProcessed: true,
+                            NativeResult: nativeEntries[index].Result)
+                        : new CloudTransferPlaceholderEntryResult(
+                            index,
+                            IsProcessed: false,
+                            NativeResult: null);
                 }
 
-                if (processed != nativeEntries.Length)
-                {
-                    throw new InvalidDataException(
-                        $"Windows processed {processed} of {nativeEntries.Length} placeholder entries.");
-                }
+                return ValueTask.FromResult(new CloudTransferPlaceholderBatchResult(results));
             }
         }
         finally
@@ -369,7 +416,6 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
             }
         }
 
-        return ValueTask.CompletedTask;
     }
 
     /// <summary>Retrieves previously transferred bytes from an aligned hydrated range.</summary>

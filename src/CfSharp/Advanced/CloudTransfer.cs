@@ -75,6 +75,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     private readonly CfTransferKey _transferKey;
     private readonly CfConnectionKey _connectionKey;
     private readonly object _gate = new();
+    private readonly List<TransferRange> _transferredRanges = [];
     private readonly Activity? _activity;
     private int _terminal;
     private int _disposed;
@@ -98,7 +99,14 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     /// <summary>Gets the lease that owns the protected item lifetime.</summary>
     public CloudItemLease Lease => _lease;
 
-    /// <summary>Transfers one aligned or end-of-file data range into the placeholder.</summary>
+    /// <summary>
+    /// Transfers one aligned or end-of-file data range into the placeholder.
+    /// </summary>
+    /// <remarks>
+    /// The owning lease must include write access. A successful range is retained by this transfer
+    /// and cannot overlap a later data transfer; this gives retries a deterministic managed
+    /// contract instead of relying on native range ordering.
+    /// </remarks>
     public ValueTask TransferDataAsync(
         long offset,
         ReadOnlyMemory<byte> data,
@@ -106,13 +114,15 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     {
         using IDisposable operation = EnterOperation();
         EnsureFileItem();
+        EnsureWriteAccess();
         cancellationToken.ThrowIfCancellationRequested();
         if (data.Length == 0)
         {
             throw new ArgumentException("A transfer data buffer cannot be empty.", nameof(data));
         }
 
-        ValidateRange(offset, data.Length);
+        long end = ValidateRange(offset, data.Length);
+        EnsureRangeDoesNotOverlap(offset, end);
         CfCorrelationVector nativeVector = default;
         bool hasVector = _options.CorrelationVector is not null;
         if (hasVector)
@@ -140,10 +150,12 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
 
         int result = CfApi.CfExecute(&operationInfo, &parameters);
         ThrowIfFailed("CloudTransfer.TransferData", _lease.Item.FullPath, result);
+        _transferredRanges.Add(new TransferRange(offset, end));
         return ValueTask.CompletedTask;
     }
 
     /// <summary>Completes the transfer with a documented Cloud Files failure status.</summary>
+    /// <remarks>The owning lease must include write access; this is terminal for the transfer.</remarks>
     public ValueTask TransferDataFailureAsync(
         long offset,
         long length,
@@ -152,6 +164,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     {
         using IDisposable operation = EnterOperation();
         EnsureFileItem();
+        EnsureWriteAccess();
         cancellationToken.ThrowIfCancellationRequested();
         ValidateRange(offset, length);
         NtStatus statusValue = MapFailure(failure);
@@ -199,7 +212,8 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     /// This operation is meaningful only for a sync root registered with
     /// <c>ValidationRequired</c>. The registration policy is owned by the sync root rather than
     /// the transfer object, so Windows remains the authority for rejecting calls on other roots.
-    /// The native call is synchronous; cancellation can prevent a call that has not started but
+    /// The owning lease must include write access and the range must have been successfully
+    /// transferred by this object. The native call is synchronous; cancellation can prevent a call that has not started but
     /// cannot interrupt an unmanaged Cloud Files operation already in progress.
     /// </remarks>
     public ValueTask AcknowledgeDataAsync(
@@ -210,8 +224,10 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     {
         using IDisposable operation = EnterOperation();
         EnsureFileItem();
+        EnsureWriteAccess();
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateRange(offset, length);
+        long end = ValidateRange(offset, length);
+        EnsureRangeWasTransferred(offset, end);
 
         CfCorrelationVector nativeVector = default;
         bool hasVector = _options.CorrelationVector is not null;
@@ -242,12 +258,14 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Transfers a bounded page of child placeholders into a directory placeholder.</summary>
+    /// <remarks>The owning directory lease must include write access.</remarks>
     public ValueTask TransferPlaceholdersAsync(
         IReadOnlyList<CloudPlaceholderSpec> children,
         CloudPlaceholderBatchOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         using IDisposable operation = EnterOperation();
+        EnsureWriteAccess();
         if (_lease.Item.Kind is not CloudItemKind.Directory)
         {
             throw new InvalidOperationException("Placeholder transfer requires a directory lease.");
@@ -448,7 +466,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
             RequestKey = new CfRequestKey { Internal = CfApi.DefaultRequestKey },
         };
 
-    private void ValidateRange(long offset, long length)
+    private long ValidateRange(long offset, long length)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(length, 0);
@@ -475,6 +493,8 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
                 "Transfer lengths must be aligned to 4 KiB unless the range reaches the logical end of file.",
                 nameof(length));
         }
+
+        return end;
     }
 
     private void EnsureFileItem()
@@ -482,6 +502,33 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         if (_lease.Item.Kind is not CloudItemKind.File)
         {
             throw new InvalidOperationException("Data transfer requires a file lease.");
+        }
+    }
+
+    private void EnsureWriteAccess()
+    {
+        if (!_lease.Options.Access.HasFlag(CloudItemLeaseAccess.Write))
+        {
+            throw new InvalidOperationException(
+                "The lease must include write access for this Cloud Files transfer operation.");
+        }
+    }
+
+    private void EnsureRangeDoesNotOverlap(long offset, long end)
+    {
+        if (_transferredRanges.Any(range => offset < range.End && end > range.Offset))
+        {
+            throw new InvalidOperationException(
+                "The transfer range overlaps a range already accepted by this transfer.");
+        }
+    }
+
+    private void EnsureRangeWasTransferred(long offset, long end)
+    {
+        if (!_transferredRanges.Any(range => offset >= range.Offset && end <= range.End))
+        {
+            throw new InvalidOperationException(
+                "The acknowledged range was not previously accepted by this transfer.");
         }
     }
 
@@ -529,6 +576,8 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
             }
         }
     }
+
+    private readonly record struct TransferRange(long Offset, long End);
 
     private static NtStatus MapFailure(CloudTransferFailure failure) => failure switch
     {

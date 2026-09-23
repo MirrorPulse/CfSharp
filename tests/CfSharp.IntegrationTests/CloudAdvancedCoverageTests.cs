@@ -86,6 +86,8 @@ public sealed class CloudAdvancedCoverageTests
                 byte[] content = new byte[4096];
                 new Random(9).NextBytes(content);
                 await transfer.TransferDataAsync(0, content);
+                await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                    await transfer.TransferDataAsync(0, content));
                 byte[] retrieved = new byte[4096];
                 CloudTransferReadResult readResult = await transfer.RetrieveDataAsync(0, retrieved);
                 Assert.Equal(content.Length, readResult.BytesRead);

@@ -74,6 +74,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     private readonly SafeCloudFilesProtectedHandle.CloudFilesHandleReference _handleReference;
     private readonly CfTransferKey _transferKey;
     private readonly CfConnectionKey _connectionKey;
+    private readonly object _gate = new();
     private readonly Activity? _activity;
     private int _terminal;
     private int _disposed;
@@ -103,7 +104,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         ReadOnlyMemory<byte> data,
         CancellationToken cancellationToken = default)
     {
-        EnsureUsable();
+        using IDisposable operation = EnterOperation();
         EnsureFileItem();
         cancellationToken.ThrowIfCancellationRequested();
         if (data.Length == 0)
@@ -149,7 +150,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         CloudTransferFailure failure,
         CancellationToken cancellationToken = default)
     {
-        EnsureUsable();
+        using IDisposable operation = EnterOperation();
         EnsureFileItem();
         cancellationToken.ThrowIfCancellationRequested();
         ValidateRange(offset, length);
@@ -207,7 +208,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         CloudTransferFailure? failure = null,
         CancellationToken cancellationToken = default)
     {
-        EnsureUsable();
+        using IDisposable operation = EnterOperation();
         EnsureFileItem();
         cancellationToken.ThrowIfCancellationRequested();
         ValidateRange(offset, length);
@@ -246,7 +247,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         CloudPlaceholderBatchOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        EnsureUsable();
+        using IDisposable operation = EnterOperation();
         if (_lease.Item.Kind is not CloudItemKind.Directory)
         {
             throw new InvalidOperationException("Placeholder transfer requires a directory lease.");
@@ -359,7 +360,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         Memory<byte> destination,
         CancellationToken cancellationToken = default)
     {
-        EnsureUsable();
+        using IDisposable operation = EnterOperation();
         EnsureFileItem();
         cancellationToken.ThrowIfCancellationRequested();
         if (destination.Length == 0)
@@ -407,25 +408,22 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     /// <summary>Releases the transfer key and its protected-handle reference.</summary>
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        lock (_gate)
         {
-            return;
-        }
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
 
-        Interlocked.Exchange(ref _terminal, 1);
-        try
-        {
+            Interlocked.Exchange(ref _terminal, 1);
             CfTransferKey key = _transferKey;
             CfApi.CfReleaseTransferKey(_handleReference.Win32Handle, &key);
-        }
-        finally
-        {
             _handleReference.Dispose();
-            _lease.TransferDisposed(this);
-            CloudDiagnostics.StopActivity(_activity, "disposed");
-            CloudDiagnostics.RecordTransferLifetime(created: false);
         }
 
+        _lease.TransferDisposed(this);
+        CloudDiagnostics.StopActivity(_activity, "disposed");
+        CloudDiagnostics.RecordTransferLifetime(created: false);
         GC.SuppressFinalize(this);
     }
 
@@ -498,6 +496,37 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         if (_lease.IsInvalidated)
         {
             throw new InvalidOperationException("The protected item lease has been invalidated.");
+        }
+    }
+
+    private OperationLease EnterOperation()
+    {
+        Monitor.Enter(_gate);
+        try
+        {
+            EnsureUsable();
+            return new OperationLease(_gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
+        }
+    }
+
+    private sealed class OperationLease : IDisposable
+    {
+        private object? _gate;
+
+        internal OperationLease(object gate) => _gate = gate;
+
+        public void Dispose()
+        {
+            object? gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null)
+            {
+                Monitor.Exit(gate);
+            }
         }
     }
 

@@ -37,7 +37,7 @@ public sealed class CloudFileSystemRemoteChangeTests
     }
 
     [Fact]
-    public async Task UnsupportedRemoteEntryStopsBatchAndRejectsChangedFingerprint()
+    public async Task MissingRemoteMoveBecomesDurableConflictAndRejectsChangedFingerprint()
     {
         string rootPath = CreateRoot();
         try
@@ -55,9 +55,9 @@ public sealed class CloudFileSystemRemoteChangeTests
 
             CloudRemoteApplyResult failed = await fileSystem.ApplyRemoteChangesAsync(batch);
             CloudRemoteApplyEntryResult entry = Assert.Single(failed.Entries);
-            Assert.Equal(CloudRemoteApplyEntryStatus.Failed, entry.Status);
-            Assert.True(failed.RequiresRetry);
-            Assert.Empty(failed.SafeCursor.ToArray());
+            Assert.Equal(CloudRemoteApplyEntryStatus.Conflict, entry.Status);
+            Assert.False(failed.RequiresRetry);
+            Assert.True(failed.SafeCursor.Span.SequenceEqual(new byte[] { 9 }));
 
             CloudRemoteChange changed = new(
                 "move-1",

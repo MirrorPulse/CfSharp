@@ -238,6 +238,18 @@ public sealed partial class CloudFileSystem
     {
         RemoteEntryContext context = await ReadRemoteEntryContextAsync(change, cancellationToken)
             .ConfigureAwait(false);
+        if (change.Kind is CloudRemoteChangeKind.Move)
+        {
+            return await ApplyRemoteMoveAsync(change, context, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (change.Kind is CloudRemoteChangeKind.Delete)
+        {
+            return await ApplyRemoteDeleteAsync(change, context, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         bool pathBelongsToAnotherItem = context.ByPath is not null &&
             !context.ByPath.IsTombstone &&
             (context.ByRemoteId is null || context.ByRemoteId.ItemId != context.ByPath.ItemId) &&
@@ -269,12 +281,6 @@ public sealed partial class CloudFileSystem
 
         bool upsert = change.Kind is CloudRemoteChangeKind.FileUpsert or
             CloudRemoteChangeKind.DirectoryUpsert;
-        if (change.Kind is not CloudRemoteChangeKind.MetadataUpdate && !upsert)
-        {
-            throw new NotSupportedException(
-                $"Remote change kind '{change.Kind}' is implemented by a later Phase 8 increment.");
-        }
-
         if (context.LocalState is not null && context.LocalOperations.Count != 0)
         {
             return RemoteEntryOutcome.ConflictResult(CreateConflict(
@@ -372,6 +378,221 @@ public sealed partial class CloudFileSystem
         return RemoteEntryOutcome.AppliedResult;
     }
 
+    private async ValueTask<RemoteEntryOutcome> ApplyRemoteMoveAsync(
+        CloudRemoteChange change,
+        RemoteEntryContext context,
+        CloudRemoteApplyOptions options,
+        CancellationToken cancellationToken)
+    {
+        CloudItemState? localState = context.LocalState;
+        if (localState is null)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState: null,
+                CloudRemoteConflictReason.MissingItem));
+        }
+
+        if (change.PreviousRemoteRevision is not null && !string.Equals(
+                localState.RemoteRevision,
+                change.PreviousRemoteRevision,
+                StringComparison.Ordinal))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.StaleRemoteRevision));
+        }
+
+        if (!string.Equals(
+                localState.RelativePath,
+                change.PreviousRelativePath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.Move));
+        }
+
+        if (context.LocalOperations.Count != 0)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.Move));
+        }
+
+        if (context.ByPath is not null &&
+            context.ByPath.ItemId != localState.ItemId &&
+            !context.ByPath.IsTombstone)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.PathCollision));
+        }
+
+        string sourceFullPath = ToFullPath(change.PreviousRelativePath!);
+        bool sourceExists = change.ItemKind is CloudItemKind.Directory
+            ? Directory.Exists(sourceFullPath)
+            : File.Exists(sourceFullPath);
+        if (!sourceExists)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                localState.IsTombstone
+                    ? CloudRemoteConflictReason.MissingItem
+                    : CloudRemoteConflictReason.Move));
+        }
+
+        CloudItem source = CreateItemReference(change.PreviousRelativePath!, change.ItemKind);
+        CloudItemSnapshot snapshot = await source.InspectAsync(cancellationToken).ConfigureAwait(false);
+        if (!snapshot.IsPlaceholder ||
+            (options.PreserveUnsynchronizedLocalContent &&
+             snapshot.SynchronizationState is CloudSynchronizationState.NotInSync))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.Move));
+        }
+
+        string destinationParentPath = Path.GetDirectoryName(change.RelativePath) ?? string.Empty;
+        CloudDirectory destination = GetDirectory(destinationParentPath);
+        string destinationName = Path.GetFileName(change.RelativePath);
+        if (options.SuppressLocalEcho)
+        {
+            await RegisterRemoteEchoSuppressionAsync(
+                    change,
+                    localState.ItemId,
+                    CloudStateOperationKind.Move,
+                    options,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await source.MoveToAsync(
+                destination,
+                destinationName,
+                CloudMoveOptions.Default,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await UpdateRemoteItemRevisionAsync(
+                localState.ItemId,
+                change.RemoteId,
+                change.RelativePath,
+                change.ItemKind,
+                change.RemoteRevision,
+                isTombstone: false,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return RemoteEntryOutcome.AppliedResult;
+    }
+
+    private async ValueTask<RemoteEntryOutcome> ApplyRemoteDeleteAsync(
+        CloudRemoteChange change,
+        RemoteEntryContext context,
+        CloudRemoteApplyOptions options,
+        CancellationToken cancellationToken)
+    {
+        CloudItemState? localState = context.LocalState;
+        if (localState is null)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState: null,
+                CloudRemoteConflictReason.MissingItem));
+        }
+
+        if (change.PreviousRemoteRevision is not null && !string.Equals(
+                localState.RemoteRevision,
+                change.PreviousRemoteRevision,
+                StringComparison.Ordinal))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.StaleRemoteRevision));
+        }
+
+        string fullPath = ToFullPath(localState.RelativePath);
+        bool exists = change.ItemKind is CloudItemKind.Directory
+            ? Directory.Exists(fullPath)
+            : File.Exists(fullPath);
+        if (localState.IsTombstone && !exists)
+        {
+            return RemoteEntryOutcome.AlreadyAppliedResult;
+        }
+
+        if (!exists)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.MissingItem));
+        }
+
+        if (context.LocalOperations.Count != 0)
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.Delete));
+        }
+
+        CloudItem item = CreateItemReference(localState.RelativePath, change.ItemKind);
+        CloudItemSnapshot snapshot = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
+        if (!snapshot.IsPlaceholder ||
+            (options.PreserveUnsynchronizedLocalContent &&
+             snapshot.SynchronizationState is CloudSynchronizationState.NotInSync))
+        {
+            return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                change,
+                localState,
+                CloudRemoteConflictReason.Delete));
+        }
+
+        if (options.SuppressLocalEcho)
+        {
+            await RegisterRemoteEchoSuppressionAsync(
+                    change,
+                    localState.ItemId,
+                    CloudStateOperationKind.Delete,
+                    options,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (item is CloudDirectory directory)
+        {
+            CloudRecursiveOperationResult result = await directory.DeleteTreeAsync(
+                    new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.IsSuccessful)
+            {
+                throw result.Entries.First(entry => entry.Error is not null).Error!;
+            }
+        }
+        else
+        {
+            await item.DeleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await UpdateRemoteItemRevisionAsync(
+                localState.ItemId,
+                change.RemoteId,
+                localState.RelativePath,
+                change.ItemKind,
+                change.RemoteRevision,
+                isTombstone: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return RemoteEntryOutcome.AppliedResult;
+    }
+
     private async ValueTask<RemoteEntryContext> ReadRemoteEntryContextAsync(
         CloudRemoteChange change,
         CancellationToken cancellationToken)
@@ -388,14 +609,25 @@ public sealed partial class CloudFileSystem
         CloudItemState? byPath = await transaction.Items
             .GetByRelativePathAsync(change.RelativePath, cancellationToken)
             .ConfigureAwait(false);
-        CloudItemState? localState = byRemoteId ?? byItemId ?? byPath;
+        CloudItemState? byPreviousPath = change.PreviousRelativePath is null
+            ? null
+            : await transaction.Items
+                .GetByRelativePathAsync(change.PreviousRelativePath, cancellationToken)
+                .ConfigureAwait(false);
+        CloudItemState? localState = byRemoteId ?? byItemId ?? byPreviousPath ?? byPath;
         IReadOnlyList<CloudOperationJournalEntry> operations = localState is null
             ? []
             : (await transaction.Operations.ListAsync(4096, cancellationToken).ConfigureAwait(false))
                 .Where(operation => operation.ItemId == localState.ItemId)
                 .ToArray();
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-        return new RemoteEntryContext(localState, byRemoteId, byItemId, byPath, operations);
+        return new RemoteEntryContext(
+            localState,
+            byRemoteId,
+            byItemId,
+            byPath,
+            byPreviousPath,
+            operations);
     }
 
     private async ValueTask RegisterRemoteEchoSuppressionAsync(
@@ -475,6 +707,39 @@ public sealed partial class CloudFileSystem
 
     private string ToFullPath(string relativePath) =>
         Path.Combine(SyncRootPath, relativePath);
+
+    private async ValueTask UpdateRemoteItemRevisionAsync(
+        Guid itemId,
+        string remoteId,
+        string relativePath,
+        CloudItemKind kind,
+        string revision,
+        bool isTombstone,
+        CancellationToken cancellationToken)
+    {
+        await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
+                "The cloud file system has no open state store.")).BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        CloudItemState? existing = await transaction.Items
+            .GetByItemIdAsync(itemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            await transaction.Items.UpsertAsync(
+                new CloudItemState(
+                    existing.ItemId,
+                    remoteId,
+                    relativePath,
+                    kind,
+                    revision,
+                    existing.LocalFileId,
+                    isTombstone,
+                    DateTimeOffset.UtcNow),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private static CloudRemoteConflict CreateConflict(
         CloudRemoteChange change,
@@ -581,6 +846,7 @@ public sealed partial class CloudFileSystem
         CloudItemState? ByRemoteId,
         CloudItemState? ByItemId,
         CloudItemState? ByPath,
+        CloudItemState? ByPreviousPath,
         IReadOnlyList<CloudOperationJournalEntry> LocalOperations);
 
     private sealed record RemoteEntryOutcome(
@@ -594,5 +860,9 @@ public sealed partial class CloudFileSystem
         internal static RemoteEntryOutcome ConflictResult(CloudRemoteConflict conflict) => new(
             CloudRemoteApplyEntryStatus.Conflict,
             conflict);
+
+        internal static RemoteEntryOutcome AlreadyAppliedResult { get; } = new(
+            CloudRemoteApplyEntryStatus.AlreadyApplied,
+            null);
     }
 }

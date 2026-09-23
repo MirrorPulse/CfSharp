@@ -184,6 +184,62 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    /// Acknowledges or rejects a previously transferred range when the sync root requires
+    /// provider validation.
+    /// </summary>
+    /// <param name="offset">4 KiB-aligned beginning of the transferred range.</param>
+    /// <param name="length">Transferred length, aligned unless it reaches the logical EOF.</param>
+    /// <param name="failure">
+    /// A Cloud Files failure to reject the range, or <see langword="null"/> to acknowledge it.
+    /// </param>
+    /// <param name="cancellationToken">Token checked before entering the native call.</param>
+    /// <remarks>
+    /// This operation is meaningful only for a sync root registered with
+    /// <c>ValidationRequired</c>. The registration policy is owned by the sync root rather than
+    /// the transfer object, so Windows remains the authority for rejecting calls on other roots.
+    /// The native call is synchronous; cancellation can prevent a call that has not started but
+    /// cannot interrupt an unmanaged Cloud Files operation already in progress.
+    /// </remarks>
+    public ValueTask AcknowledgeDataAsync(
+        long offset,
+        long length,
+        CloudTransferFailure? failure = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureUsable();
+        EnsureFileItem();
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateRange(offset, length);
+
+        CfCorrelationVector nativeVector = default;
+        bool hasVector = _options.CorrelationVector is not null;
+        if (hasVector)
+        {
+            nativeVector = _options.CorrelationVector!.Value.ToNative();
+        }
+
+        using SyncStatusBuffer? status = SyncStatusBuffer.Create(_options.OperationStatus);
+        CfOperationInfo operationInfo = CreateOperationInfo(
+            CfOperationType.AckData,
+            hasVector ? &nativeVector : null,
+            status is null ? (CfSyncStatus*)null : status.Pointer);
+        CfOperationParameters parameters = new()
+        {
+            ParamSize = checked((uint)(8 + sizeof(CfOperationAckDataParameters))),
+            AckData = new CfOperationAckDataParameters
+            {
+                CompletionStatus = failure is null ? NtStatus.Success : MapFailure(failure.Value),
+                Offset = offset,
+                Length = length,
+            },
+        };
+
+        int result = CfApi.CfExecute(&operationInfo, &parameters);
+        ThrowIfFailed("CloudTransfer.AcknowledgeData", _lease.Item.FullPath, result);
+        return ValueTask.CompletedTask;
+    }
+
     /// <summary>Transfers a bounded page of child placeholders into a directory placeholder.</summary>
     public ValueTask TransferPlaceholdersAsync(
         IReadOnlyList<CloudPlaceholderSpec> children,

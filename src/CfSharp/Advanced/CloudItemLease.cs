@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Diagnostics;
 
 using CfSharp.Native;
 
@@ -13,6 +14,7 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
     private readonly SafeCloudFilesProtectedHandle _protectedHandle;
     private readonly object _gate = new();
     private readonly CloudItemLeaseOptions _options;
+    private readonly Activity? _activity;
     private CloudTransfer? _transfer;
     private int _disposed;
 
@@ -28,6 +30,8 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
         _operation = operation;
         _providerSession = providerSession;
         _protectedHandle = protectedHandle;
+        _activity = CloudDiagnostics.StartActivity("cfsharp.item.lease", "lease");
+        CloudDiagnostics.RecordLeaseLifetime(created: true);
     }
 
     /// <summary>Gets the immutable item reference held by this lease.</summary>
@@ -147,6 +151,8 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
         {
             _protectedHandle.Dispose();
             _operation.Dispose();
+            CloudDiagnostics.StopActivity(_activity, "disposed");
+            CloudDiagnostics.RecordLeaseLifetime(created: false);
             GC.SuppressFinalize(this);
         }
     }

@@ -93,6 +93,8 @@ public sealed class CloudProviderProgressReporter
         }
 
         Volatile.Write(ref _lastReportedTimestamp, now);
-        return _report(target, completed, total);
+        CloudProgressReportResult result = _report(target, completed, total);
+        CloudDiagnostics.RecordProgress(result);
+        return result;
     }
 }

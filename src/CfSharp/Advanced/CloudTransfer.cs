@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -73,6 +74,7 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     private readonly SafeCloudFilesProtectedHandle.CloudFilesHandleReference _handleReference;
     private readonly CfTransferKey _transferKey;
     private readonly CfConnectionKey _connectionKey;
+    private readonly Activity? _activity;
     private int _terminal;
     private int _disposed;
 
@@ -88,6 +90,8 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         _handleReference = handleReference;
         _transferKey = transferKey;
         _connectionKey = connectionKey;
+        _activity = CloudDiagnostics.StartActivity("cfsharp.item.transfer", "transfer");
+        CloudDiagnostics.RecordTransferLifetime(created: true);
     }
 
     /// <summary>Gets the lease that owns the protected item lifetime.</summary>
@@ -362,6 +366,8 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         {
             _handleReference.Dispose();
             _lease.TransferDisposed(this);
+            CloudDiagnostics.StopActivity(_activity, "disposed");
+            CloudDiagnostics.RecordTransferLifetime(created: false);
         }
 
         GC.SuppressFinalize(this);

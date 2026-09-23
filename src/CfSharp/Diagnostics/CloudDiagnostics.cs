@@ -29,13 +29,25 @@ public static class CloudDiagnostics
         Meter.CreateCounter<long>("cfsharp.provider.work.rejected");
     private static readonly System.Diagnostics.Metrics.Counter<long> NativeFailures =
         Meter.CreateCounter<long>("cfsharp.native.failures");
+    private static readonly System.Diagnostics.Metrics.Counter<long> ProgressReports =
+        Meter.CreateCounter<long>("cfsharp.provider.progress.reports");
+    private static readonly System.Diagnostics.Metrics.Counter<long> LeaseLifetimes =
+        Meter.CreateCounter<long>("cfsharp.item.leases");
+    private static readonly System.Diagnostics.Metrics.Counter<long> TransferLifetimes =
+        Meter.CreateCounter<long>("cfsharp.item.transfers");
 
     internal static Activity? StartActivity(string name, CloudProviderRequestKind kind)
+    {
+        Activity? activity = StartActivity(name, kind.ToString());
+        return activity;
+    }
+
+    internal static Activity? StartActivity(string name, string operation)
     {
         try
         {
             Activity? activity = ActivitySource.StartActivity(name, ActivityKind.Internal);
-            activity?.SetTag("cfsharp.request.kind", kind.ToString());
+            activity?.SetTag("cfsharp.operation", operation);
             return activity;
         }
         catch
@@ -81,6 +93,49 @@ public static class CloudDiagnostics
         try
         {
             NativeFailures.Add(1, new KeyValuePair<string, object?>("cfsharp.operation", operation));
+        }
+        catch
+        {
+            // Meter listeners are diagnostic only.
+        }
+    }
+
+    internal static void RecordProgress(CloudProgressReportResult result)
+    {
+        try
+        {
+            ProgressReports.Add(
+                1,
+                new KeyValuePair<string, object?>("cfsharp.progress.state", result.State.ToString()),
+                new KeyValuePair<string, object?>("cfsharp.progress.route", result.UsedV2 ? "v2" : "v1"));
+        }
+        catch
+        {
+            // Meter listeners are diagnostic only.
+        }
+    }
+
+    internal static void RecordLeaseLifetime(bool created)
+    {
+        try
+        {
+            LeaseLifetimes.Add(
+                1,
+                new KeyValuePair<string, object?>("cfsharp.lifecycle", created ? "created" : "disposed"));
+        }
+        catch
+        {
+            // Meter listeners are diagnostic only.
+        }
+    }
+
+    internal static void RecordTransferLifetime(bool created)
+    {
+        try
+        {
+            TransferLifetimes.Add(
+                1,
+                new KeyValuePair<string, object?>("cfsharp.lifecycle", created ? "created" : "disposed"));
         }
         catch
         {

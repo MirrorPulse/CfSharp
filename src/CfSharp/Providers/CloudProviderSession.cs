@@ -357,8 +357,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             fileSize,
             nativeRequest.RequiredFileOffset,
             nativeRequest.RequiredLength,
-            new CloudProviderProgressReporter((completed, total) =>
-                ReportProgress(connectionKey, transferKey, requestKey, completed, total)),
+            new CloudProviderProgressReporter((target, completed, total) =>
+                ReportProgress(
+                    connectionKey,
+                    transferKey,
+                    requestKey,
+                    CloudProgressTarget.CurrentHydrationRequest,
+                    completed,
+                    total,
+                    _options.ProgressFallbackPolicy)),
             (replacement, markInSync) => RestartHydrationAsync(
                 connectionKey,
                 transferKey,
@@ -367,7 +374,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 nativeRequest.RequiredLength,
                 replacement,
                 markInSync),
-            correlationVector);
+            correlationVector,
+            new CloudProviderRequestId(requestKey.Internal));
         CancellationTokenSource cancellation =
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         ActiveRequest activeRequest = new(
@@ -1400,19 +1408,68 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
     }
 
-    private static void ReportProgress(
+    private static CloudProgressReportResult ReportProgress(
         CfConnectionKey connectionKey,
         CfTransferKey transferKey,
         CfRequestKey requestKey,
+        CloudProgressTarget target,
         long completed,
-        long total)
+        long total,
+        CloudProgressFallbackPolicy fallbackPolicy)
     {
-        _ = requestKey;
-        _ = CfApi.CfReportProviderProgress(
+        if (target.IsCurrentHydration)
+        {
+            return ReportProgressV1(connectionKey, transferKey, total, completed);
+        }
+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+        {
+            return fallbackPolicy is CloudProgressFallbackPolicy.FallbackToV1
+                ? ReportProgressV1(connectionKey, transferKey, total, completed)
+                : new CloudProgressReportResult(
+                    CloudProgressReportState.Unsupported,
+                    UsedV2: true,
+                    HResult: unchecked((int)0x80070032));
+        }
+
+        try
+        {
+            int result = CfApi.CfReportProviderProgress2(
+                connectionKey,
+                transferKey,
+                new CfRequestKey { Internal = target.RequestId!.Value.ToNativeValue() },
+                total,
+                completed,
+                target.TargetSessionId);
+            return result < 0
+                ? new CloudProgressReportResult(CloudProgressReportState.NativeFailure, true, result)
+                : new CloudProgressReportResult(CloudProgressReportState.Reported, true, result);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return fallbackPolicy is CloudProgressFallbackPolicy.FallbackToV1
+                ? ReportProgressV1(connectionKey, transferKey, total, completed)
+                : new CloudProgressReportResult(
+                    CloudProgressReportState.Unsupported,
+                    UsedV2: true,
+                    HResult: unchecked((int)0x8007007F));
+        }
+    }
+
+    private static CloudProgressReportResult ReportProgressV1(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        long total,
+        long completed)
+    {
+        int result = CfApi.CfReportProviderProgress(
             connectionKey,
             transferKey,
             total,
             completed);
+        return result < 0
+            ? new CloudProgressReportResult(CloudProgressReportState.NativeFailure, false, result)
+            : new CloudProgressReportResult(CloudProgressReportState.Reported, false, result);
     }
 
     private static unsafe ValueTask RestartHydrationAsync(

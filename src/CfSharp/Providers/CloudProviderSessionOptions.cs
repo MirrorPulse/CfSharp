@@ -49,6 +49,10 @@ public sealed record CloudProviderSessionOptions
     /// <summary>Blocks implicit hydration initiated by the provider process.</summary>
     public bool BlockSelfImplicitHydration { get; init; }
 
+    /// <summary>Gets the explicit fallback behavior for request-targeted progress.</summary>
+    public CloudProgressFallbackPolicy ProgressFallbackPolicy { get; init; } =
+        CloudProgressFallbackPolicy.FallbackToV1;
+
     internal void Validate()
     {
         ValidatePositive(QueueCapacity, nameof(QueueCapacity));
@@ -72,6 +76,14 @@ public sealed record CloudProviderSessionOptions
                 nameof(ShutdownTimeout),
                 ShutdownTimeout,
                 "Shutdown timeout must be positive and no longer than five minutes.");
+        }
+
+        if (!Enum.IsDefined(ProgressFallbackPolicy))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(ProgressFallbackPolicy),
+                ProgressFallbackPolicy,
+                "The progress fallback policy is not defined.");
         }
     }
 

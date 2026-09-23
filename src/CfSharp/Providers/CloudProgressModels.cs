@@ -92,3 +92,13 @@ public readonly record struct CloudProgressReportResult(
     /// <summary>Gets whether the report reached a native progress API.</summary>
     public bool WasSent => State is CloudProgressReportState.Reported or CloudProgressReportState.NativeFailure;
 }
+
+/// <summary>Controls how request-targeted progress behaves when V2 is unavailable.</summary>
+public enum CloudProgressFallbackPolicy
+{
+    /// <summary>Report through V1 for the connection/transfer when V2 is unavailable.</summary>
+    FallbackToV1 = 0,
+
+    /// <summary>Return <see cref="CloudProgressReportState.Unsupported"/> without using V1.</summary>
+    FailIfUnavailable = 1,
+}

@@ -39,6 +39,15 @@ public static class CloudDiagnostics
     internal static Activity? StartActivity(string name, CloudProviderRequestKind kind)
     {
         Activity? activity = StartActivity(name, kind.ToString());
+        try
+        {
+            activity?.SetTag("cfsharp.request.kind", kind.ToString());
+        }
+        catch
+        {
+            // Diagnostic tags must never cross a provider boundary.
+        }
+
         return activity;
     }
 

@@ -64,12 +64,14 @@ internal sealed class CloudProviderWorkItem
             }
             else
             {
+                CloudDiagnostics.RecordException(activity, exception);
                 CloudDiagnostics.StopActivity(activity, "failed");
                 _failed(exception);
             }
         }
         catch (Exception exception)
         {
+            CloudDiagnostics.RecordException(activity, exception);
             CloudDiagnostics.StopActivity(activity, "failed");
             _failed(exception);
         }

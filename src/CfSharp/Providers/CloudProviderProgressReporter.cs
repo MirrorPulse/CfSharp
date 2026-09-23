@@ -67,10 +67,12 @@ public sealed class CloudProviderProgressReporter
         long previous = Volatile.Read(ref _lastCompleted);
         if (completed < previous)
         {
-            return new CloudProgressReportResult(
+            CloudProgressReportResult throttled = new(
                 CloudProgressReportState.Throttled,
                 UsedV2: target.RequestId is not null,
                 HResult: 0);
+            CloudDiagnostics.RecordProgress(throttled);
+            return throttled;
         }
 
         long now = DateTime.UtcNow.Ticks;
@@ -78,18 +80,22 @@ public sealed class CloudProviderProgressReporter
         if (completed != total && previous >= 0 && now - lastTimestamp < MinimumIntervalTicks)
         {
             Interlocked.Exchange(ref _lastCompleted, completed);
-            return new CloudProgressReportResult(
+            CloudProgressReportResult throttled = new(
                 CloudProgressReportState.Throttled,
                 UsedV2: target.RequestId is not null,
                 HResult: 0);
+            CloudDiagnostics.RecordProgress(throttled);
+            return throttled;
         }
 
         if (Interlocked.CompareExchange(ref _lastCompleted, completed, previous) != previous)
         {
-            return new CloudProgressReportResult(
+            CloudProgressReportResult throttled = new(
                 CloudProgressReportState.Throttled,
                 UsedV2: target.RequestId is not null,
                 HResult: 0);
+            CloudDiagnostics.RecordProgress(throttled);
+            return throttled;
         }
 
         Volatile.Write(ref _lastReportedTimestamp, now);

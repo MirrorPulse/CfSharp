@@ -44,48 +44,6 @@ change feed, and application-owned remote change application are implemented. Th
 state contracts and official SQLite provider are implemented. The complete product sample and
 release packaging remain future phases. No production package has been released.
 
-## Advanced Safe Coverage
-
-The advanced surface keeps Cloud Files ownership inside managed lifetimes. A started
-`CloudFileSystem` can open a `CloudItemLease` and then create one `CloudTransfer`; neither type
-exposes a pointer, `nint`, Win32 handle, or native union. Disposing the transfer releases its
-transfer key before the lease closes its protected handle and operation admission.
-
-```csharp
-await using CloudItemLease lease = await file.AcquireLeaseAsync(
-    CloudItemLeaseOptions.ExclusiveWrite,
-    cancellationToken);
-await using CloudTransfer transfer = await lease.BeginTransferAsync(
-    new CloudTransferOptions
-    {
-        CorrelationVector = correlationVector,
-    },
-    cancellationToken);
-
-await transfer.TransferDataAsync(0, buffer, cancellationToken);
-```
-
-`TransferDataAsync` and `TransferDataFailureAsync` preserve the native call result and validate
-4 KiB ranges before entering Cloud Files. `RetrieveDataAsync` is available for a sync root
-registered with `CloudHydrationPolicyModifiers.ValidationRequired`; callers verify the returned
-bytes and then call `AcknowledgeDataAsync` (or pass a documented Cloud Files failure). Native
-Cloud Files calls are synchronous, so cancellation is honored before entry and cannot interrupt
-an unmanaged call already in progress. Proactive transfer does not write the SQLite state store,
-local journal, or remote-change cursor.
-
-`CloudCorrelationVector` values are copied before callback memory expires and can be carried on
-provider request objects, leases, and transfers. `CloudSyncRoot.ReportStatus`/`ClearStatus` and
-`CloudProviderSession.UpdateStatus` retain native status errors and platform gates. Progress
-reports expose V1/V2 route, fallback, throttling, and native-failure results without changing the
-primary request outcome.
-
-Optional diagnostics are exposed through the BCL `ActivitySource` and `Meter` named `CfSharp`.
-CfSharp does not configure exporters or loggers; diagnostic tags are low-cardinality and exclude
-paths, identities, content, credentials, and device identifiers. Listener failures are isolated
-from provider callbacks and transfer results. Native-only boundaries, including
-`CfGetPlaceholderRangeInfoForHydration`, remain documented in the phase 9 coverage matrix and
-are available through `CfSharp.Native` when a caller can satisfy their callback lifetime.
-
 ## Sync Root Lifecycle
 
 ```csharp

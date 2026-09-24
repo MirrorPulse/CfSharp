@@ -117,6 +117,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
     private readonly Dictionary<CloudProviderRequestKind, SemaphoreSlim> _limits;
     private readonly SemaphoreSlim _workerSlots;
     private readonly Task[] _workers;
+    private readonly int _maxOutstandingWorkItems;
     private readonly object _activeGate = new();
     private readonly HashSet<CloudProviderWorkItem> _active = [];
     private readonly TaskCompletionSource<object?> _disposeCompletion =
@@ -124,6 +125,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
     private int _accepting = 1;
     private int _disposed;
     private int _resourcesDisposed;
+    private int _outstandingWorkItems;
 
     internal CloudProviderDispatcher(CloudProviderSessionOptions options)
     {
@@ -147,6 +149,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             [CloudProviderRequestKind.CompletionNotification] = new(options.MaxConcurrentPolicyRequests),
         };
         _workerSlots = new SemaphoreSlim(options.WorkerCount, options.WorkerCount);
+        _maxOutstandingWorkItems = checked(options.QueueCapacity + options.WorkerCount);
         _workers = Enumerable.Range(0, options.WorkerCount)
             .Select(_ => WorkerLoopAsync())
             .ToArray();
@@ -161,12 +164,22 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             return false;
         }
 
+        int outstanding = Interlocked.Increment(ref _outstandingWorkItems);
+        if (outstanding > _maxOutstandingWorkItems)
+        {
+            Interlocked.Decrement(ref _outstandingWorkItems);
+            CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: false);
+            workItem.Cancel();
+            return false;
+        }
+
         if (_queue.Writer.TryWrite(workItem))
         {
             CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: true);
             return true;
         }
 
+        Interlocked.Decrement(ref _outstandingWorkItems);
         CloudDiagnostics.RecordWorkItemEnqueued(workItem.Kind, accepted: false);
         workItem.Cancel();
         return false;
@@ -193,6 +206,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             _shutdown.Cancel();
             while (_queue.Reader.TryRead(out CloudProviderWorkItem? queued))
             {
+                Interlocked.Decrement(ref _outstandingWorkItems);
                 queued.Cancel();
             }
 
@@ -241,6 +255,10 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
                     // Do not await a per-kind semaphore here. The scheduling task can wait for
                     // that permit while another kind uses an available worker slot.
                     scheduled.Add(RunWorkItemAsync(workItem).AsTask());
+                    if (scheduled.Count >= 64)
+                    {
+                        PruneCompleted(scheduled);
+                    }
                 }
             }
         }
@@ -248,6 +266,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         {
             while (_queue.Reader.TryRead(out CloudProviderWorkItem? queued))
             {
+                Interlocked.Decrement(ref _outstandingWorkItems);
                 queued.Cancel();
             }
         }
@@ -255,6 +274,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         {
             try
             {
+                PruneCompleted(scheduled);
                 await Task.WhenAll(scheduled).ConfigureAwait(false);
             }
             catch (Exception)
@@ -265,11 +285,29 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         }
     }
 
+    private static void PruneCompleted(List<Task> scheduled)
+    {
+        for (int index = scheduled.Count - 1; index >= 0; index--)
+        {
+            Task task = scheduled[index];
+            if (!task.IsCompleted)
+            {
+                continue;
+            }
+
+            // RunWorkItemAsync translates expected failures, but observe any unexpected fault
+            // before dropping the task so pruning cannot create unobserved exceptions.
+            _ = task.Exception;
+            scheduled.RemoveAt(index);
+        }
+    }
+
     private async ValueTask RunWorkItemAsync(CloudProviderWorkItem workItem)
     {
         if (!_limits.TryGetValue(workItem.Kind, out SemaphoreSlim? limit))
         {
             workItem.Fail(new InvalidOperationException($"Unsupported provider request kind: {workItem.Kind}."));
+            Interlocked.Decrement(ref _outstandingWorkItems);
             return;
         }
 
@@ -286,6 +324,7 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
         if (!registered)
         {
             workItem.Cancel();
+            Interlocked.Decrement(ref _outstandingWorkItems);
             return;
         }
 
@@ -323,6 +362,8 @@ internal sealed class CloudProviderDispatcher : IAsyncDisposable
             {
                 _workerSlots.Release();
             }
+
+            Interlocked.Decrement(ref _outstandingWorkItems);
         }
     }
 

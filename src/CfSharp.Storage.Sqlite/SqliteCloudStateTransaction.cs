@@ -228,7 +228,14 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         }
         finally
         {
-            _completed();
+            try
+            {
+                _completed();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
         }
 
         return failures is null ? null : new AggregateException(failures);

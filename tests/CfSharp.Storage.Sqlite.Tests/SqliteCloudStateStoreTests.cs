@@ -43,6 +43,30 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     protected override CloudStateStoreContext CreateContext() => new(_syncRootPath);
 
     [Fact]
+    public async Task CommitDoesNotReportCleanupCallbackFailureAsCommitFailure()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using SqliteTransaction nativeTransaction =
+            (SqliteTransaction)await connection.BeginTransactionAsync();
+        int completionCalls = 0;
+        await using SqliteCloudStateTransaction transaction = new(
+            connection,
+            nativeTransaction,
+            "in-memory",
+            () =>
+            {
+                completionCalls++;
+                throw new InvalidOperationException("test cleanup failure");
+            });
+
+        await transaction.CommitAsync();
+
+        Assert.Equal(1, completionCalls);
+        await transaction.DisposeAsync();
+    }
+
+    [Fact]
     public async Task CheckpointPrefixQueryListsOnlyTheRequestedDirectorySubtree()
     {
         await using ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext());

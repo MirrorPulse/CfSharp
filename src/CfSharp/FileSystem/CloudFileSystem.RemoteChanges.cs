@@ -6,6 +6,7 @@ namespace CfSharp;
 public sealed partial class CloudFileSystem
 {
     private const int RemoteConflictEnvelopeVersion = 1;
+    private readonly SemaphoreSlim _remoteApplyGate = new(1, 1);
 
     /// <summary>
     /// Applies an immutable application-supplied remote change batch to this sync root.
@@ -32,6 +33,25 @@ public sealed partial class CloudFileSystem
     /// last committed entry without publishing an unsafe cursor.
     /// </remarks>
     public async ValueTask<CloudRemoteApplyResult> ApplyRemoteChangesAsync(
+        CloudRemoteChangeBatch batch,
+        CloudRemoteApplyOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        EnsureStarted();
+        await _remoteApplyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ApplyRemoteChangesCoreAsync(batch, options, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _remoteApplyGate.Release();
+        }
+    }
+
+    private async ValueTask<CloudRemoteApplyResult> ApplyRemoteChangesCoreAsync(
         CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions? options = null,
         CancellationToken cancellationToken = default)
@@ -171,6 +191,29 @@ public sealed partial class CloudFileSystem
         Guid conflictId,
         CloudRemoteConflictResolution resolution,
         CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        await _remoteApplyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+                    [CloudItemOperationScope.Subtree(SyncRootPath)],
+                    establishContext: true,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return await ResolveRemoteConflictCoreAsync(conflictId, resolution, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _remoteApplyGate.Release();
+        }
+    }
+
+    private async ValueTask<CloudRemoteApplyEntryResult> ResolveRemoteConflictCoreAsync(
+        Guid conflictId,
+        CloudRemoteConflictResolution resolution,
+        CancellationToken cancellationToken)
     {
         EnsureStarted();
         if (conflictId == Guid.Empty)
@@ -329,10 +372,12 @@ public sealed partial class CloudFileSystem
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
-        RemoteEntryOutcome outcome = await ApplyRemoteEntryCoreAsync(
-                change,
-                options,
-                cancellationToken)
+        using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+                [CloudItemOperationScope.Subtree(SyncRootPath)],
+                establishContext: true,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        RemoteEntryOutcome outcome = await ApplyRemoteEntryCoreAsync(change, options, cancellationToken)
             .ConfigureAwait(false);
         if (outcome.Conflict is null || options.ConflictResolver is null)
         {

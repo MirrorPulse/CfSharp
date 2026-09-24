@@ -40,6 +40,7 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly CloudItemOperationCoordinator _operationCoordinator = new();
+    private readonly AsyncLocal<CloudFileSystemOperationLease?> _operationContext = new();
     private readonly ICloudStateStoreFactory _stateStoreFactory;
     private readonly SyncRootRegistrationOptions? _registration;
     private readonly ICloudFileContentProvider? _contentProvider;
@@ -396,14 +397,40 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
 
     internal async ValueTask<CloudFileSystemOperationLease> AcquireOperationAsync(
         IEnumerable<CloudItemOperationScope> scopes,
+        CancellationToken cancellationToken = default) =>
+        await AcquireOperationAsync(
+                scopes,
+                establishContext: false,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+    private async ValueTask<CloudFileSystemOperationLease> AcquireOperationAsync(
+        IEnumerable<CloudItemOperationScope> scopes,
+        bool establishContext,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scopes);
+        IReadOnlyList<CloudItemOperationScope> requestedScopes = scopes.ToArray();
         ICloudStateStore stateStore;
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureStarted();
+            CloudFileSystemOperationLease? currentContext = _operationContext.Value;
+            if (currentContext is not null &&
+                currentContext.Owner is not null &&
+                currentContext.Owner == this &&
+                currentContext.Covers(requestedScopes))
+            {
+                stateStore = currentContext.StateStore;
+                Interlocked.Increment(ref _activeOperations);
+                return new CloudFileSystemOperationLease(
+                    this,
+                    stateStore,
+                    pathLease: null,
+                    scopes: []);
+            }
+
             stateStore = _stateStore ??
                 throw new InvalidOperationException("The cloud file system has no open state store.");
             if (Volatile.Read(ref _activeOperations) == 0)
@@ -423,9 +450,15 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
         try
         {
             CloudItemOperationCoordinator.CloudItemOperationPathLease pathLease =
-                await _operationCoordinator.AcquireAsync(scopes, cancellationToken)
+                await _operationCoordinator.AcquireAsync(requestedScopes, cancellationToken)
                     .ConfigureAwait(false);
-            return new CloudFileSystemOperationLease(this, stateStore, pathLease);
+            return new CloudFileSystemOperationLease(
+                this,
+                stateStore,
+                pathLease,
+                requestedScopes,
+                establishContext ? _operationContext.Value : null,
+                establishContext);
         }
         catch
         {
@@ -596,18 +629,37 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     {
         private CloudFileSystem? _owner;
         private CloudItemOperationCoordinator.CloudItemOperationPathLease? _pathLease;
+        private readonly IReadOnlyList<CloudItemOperationScope> _scopes;
+        private readonly CloudFileSystemOperationLease? _previousContext;
+        private readonly bool _establishesContext;
 
         internal CloudFileSystemOperationLease(
             CloudFileSystem owner,
             ICloudStateStore stateStore,
-            CloudItemOperationCoordinator.CloudItemOperationPathLease pathLease)
+            CloudItemOperationCoordinator.CloudItemOperationPathLease? pathLease,
+            IReadOnlyList<CloudItemOperationScope> scopes,
+            CloudFileSystemOperationLease? previousContext = null,
+            bool establishesContext = false)
         {
             _owner = owner;
             StateStore = stateStore;
             _pathLease = pathLease;
+            _scopes = scopes;
+            _previousContext = previousContext;
+            _establishesContext = establishesContext;
+            if (establishesContext)
+            {
+                owner._operationContext.Value = this;
+            }
         }
 
+        internal CloudFileSystem? Owner => _owner;
+
         internal ICloudStateStore StateStore { get; }
+
+        internal bool Covers(IReadOnlyList<CloudItemOperationScope> scopes) =>
+            _pathLease is not null && scopes.All(scope =>
+                _scopes.Any(outer => outer.Contains(scope)));
 
         public void Dispose()
         {
@@ -615,6 +667,11 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             if (owner is null)
             {
                 return;
+            }
+
+            if (_establishesContext)
+            {
+                owner._operationContext.Value = _previousContext;
             }
 
             Interlocked.Exchange(ref _pathLease, null)?.Dispose();

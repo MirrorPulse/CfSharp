@@ -33,6 +33,10 @@ internal readonly record struct CloudItemOperationScope
             (other.IncludesDescendants && IsSameOrDescendant(Path, other.Path));
     }
 
+    internal bool Contains(CloudItemOperationScope other) =>
+        string.Equals(Path, other.Path, StringComparison.OrdinalIgnoreCase) ||
+        (IncludesDescendants && IsSameOrDescendant(other.Path, Path));
+
     private static bool IsSameOrDescendant(string candidate, string ancestor)
     {
         if (string.Equals(candidate, ancestor, StringComparison.OrdinalIgnoreCase))

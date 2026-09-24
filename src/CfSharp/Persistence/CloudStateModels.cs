@@ -109,7 +109,7 @@ public sealed class CloudItemState
 
         ItemId = itemId;
         RemoteId = CloudStateModelValidation.RequireText(remoteId, nameof(remoteId));
-        RelativePath = CloudRemotePathValidation.Canonicalize(relativePath, nameof(relativePath));
+        RelativePath = CloudStateModelValidation.CanonicalizeRelativePath(relativePath, nameof(relativePath));
         Kind = CloudStateModelValidation.RequireDefined(kind, nameof(kind));
         RemoteRevision = remoteRevision;
         LocalFileId = localFileId;
@@ -385,10 +385,10 @@ public sealed class CloudEchoSuppressionState
         SuppressionId = suppressionId;
         ItemId = itemId;
         Kind = CloudStateModelValidation.RequireDefined(kind, nameof(kind));
-        RelativePath = CloudRemotePathValidation.Canonicalize(relativePath, nameof(relativePath));
+        RelativePath = CloudStateModelValidation.CanonicalizeRelativePath(relativePath, nameof(relativePath));
         PreviousRelativePath = previousRelativePath is null
             ? null
-            : CloudRemotePathValidation.Canonicalize(previousRelativePath, nameof(previousRelativePath));
+            : CloudStateModelValidation.CanonicalizeRelativePath(previousRelativePath, nameof(previousRelativePath));
         _payload = payload.ToArray();
         ExpiresAt = expiresAt.ToUniversalTime();
         RemainingObservations = remainingObservations;
@@ -471,6 +471,19 @@ public sealed class CloudEchoSuppressionState
 
 internal static class CloudStateModelValidation
 {
+    internal static string CanonicalizeRelativePath(string value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        if (value.Length != 0)
+        {
+            // Validate every segment against the Windows relative-path contract, while retaining
+            // the caller's separator spelling for repository keys and cursor compatibility.
+            _ = CloudRemotePathValidation.Canonicalize(value, parameterName);
+        }
+
+        return value;
+    }
+
     internal static string RequireText(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);

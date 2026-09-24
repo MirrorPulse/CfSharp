@@ -53,7 +53,12 @@ public sealed partial class CloudDirectory
     /// The sync root was selected while root deletion was enabled.
     /// </exception>
     /// <exception cref="CloudItemCoordinationException">
-    /// An entry was deleted but its durable tombstone could not be committed.
+    /// An entry was deleted but its durable tombstone could not be committed. The exception's
+    /// <see cref="CloudItemCoordinationException.PartialResult"/> preserves prior results.
+    /// </exception>
+    /// <exception cref="CloudRecursiveOperationCanceledException">
+    /// Cancellation was observed after one or more entries completed; the exception preserves the
+    /// partial result.
     /// </exception>
     /// <remarks>
     /// Windows deletion failures are retained in the corresponding entry. A symbolic link or

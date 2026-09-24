@@ -311,3 +311,23 @@ public sealed class CloudRecursiveOperationResult
         }
     }
 }
+
+/// <summary>Reports cancellation after a recursive operation produced a partial result.</summary>
+public sealed class CloudRecursiveOperationCanceledException : OperationCanceledException
+{
+    internal CloudRecursiveOperationCanceledException(
+        CloudRecursiveOperationResult partialResult,
+        Exception innerException,
+        CancellationToken cancellationToken)
+        : base(
+            "The recursive operation was canceled after one or more entries completed.",
+            innerException,
+            cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(partialResult);
+        PartialResult = partialResult;
+    }
+
+    /// <summary>Gets the ordered result accumulated before cancellation.</summary>
+    public CloudRecursiveOperationResult PartialResult { get; }
+}

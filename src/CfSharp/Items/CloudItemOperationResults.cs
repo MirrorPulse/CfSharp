@@ -233,6 +233,18 @@ public sealed class CloudItemCoordinationException : Exception
         OperationUsn = operationUsn;
     }
 
+    internal CloudItemCoordinationException(
+        string operation,
+        string path,
+        long? operationUsn,
+        Exception innerException,
+        CloudRecursiveOperationResult partialResult)
+        : this(operation, path, destinationPath: null, operationUsn, innerException)
+    {
+        ArgumentNullException.ThrowIfNull(partialResult);
+        PartialResult = partialResult;
+    }
+
     /// <summary>Gets the stable CfSharp operation name.</summary>
     public string Operation { get; }
 
@@ -244,4 +256,10 @@ public sealed class CloudItemCoordinationException : Exception
 
     /// <summary>Gets the final USN returned by Windows, when available.</summary>
     public long? OperationUsn { get; }
+
+    /// <summary>
+    /// Gets the ordered recursive result accumulated before durable-state coordination failed, or
+    /// <see langword="null"/> for a non-recursive operation.
+    /// </summary>
+    public CloudRecursiveOperationResult? PartialResult { get; }
 }

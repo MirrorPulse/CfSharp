@@ -175,6 +175,39 @@ internal static partial class CloudItemInspector
         };
     }
 
+    internal static unsafe bool IsCloudPlaceholder(string path)
+    {
+        using SafeFileHandle handle = CreateFile(
+            path,
+            desiredAccess: 0,
+            FileShareReadWriteDelete,
+            securityAttributes: 0,
+            OpenExisting,
+            FileFlagOpenReparsePoint | FileFlagBackupSemantics,
+            templateFile: 0);
+        if (handle.IsInvalid)
+        {
+            return false;
+        }
+
+        FileAttributeTagInfo attributeTagInfo;
+        if (!GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInformationClass,
+                &attributeTagInfo,
+                (uint)sizeof(FileAttributeTagInfo)) ||
+            !((FileAttributes)attributeTagInfo.FileAttributes).HasFlag(FileAttributes.ReparsePoint))
+        {
+            return false;
+        }
+
+        CfPlaceholderState state = CfApi.CfGetPlaceholderStateFromAttributeTag(
+            attributeTagInfo.FileAttributes,
+            attributeTagInfo.ReparseTag);
+        return state != CfPlaceholderState.Invalid &&
+            state.HasFlag(CfPlaceholderState.Placeholder);
+    }
+
     private static unsafe PlaceholderInformation ReadPlaceholderInformation(
         SafeFileHandle handle,
         string path)

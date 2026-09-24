@@ -71,52 +71,67 @@ public sealed partial class CloudFileSystem
             options.IncludeRoot);
         List<CloudRecursiveOperationEntryResult> results = new(entries.Count);
         bool stopped = false;
-        foreach (RecursiveItemEntry entry in entries)
+        try
         {
-            if (stopped)
+            foreach (RecursiveItemEntry entry in entries)
             {
+                if (stopped)
+                {
+                    results.Add(CreateRecursiveResult(
+                        entry,
+                        CloudItemOperationStatus.NotProcessed,
+                        error: null));
+                    continue;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    DeleteLocalItem(entry.FullPath, entry.Kind, "CloudDirectory.DeleteTree");
+                }
+                catch (CloudFilesException exception)
+                {
+                    results.Add(CreateRecursiveResult(
+                        entry,
+                        CloudItemOperationStatus.Failed,
+                        exception));
+                    stopped = options.StopOnFirstFailure;
+                    continue;
+                }
+
+                try
+                {
+                    _ = await PersistTombstoneAsync(
+                        operation.StateStore,
+                        entry.RelativePath,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    results.Add(CreateRecursiveResult(
+                        entry,
+                        CloudItemOperationStatus.Succeeded,
+                        error: null));
+                    throw new CloudItemCoordinationException(
+                        "CloudDirectory.DeleteTree",
+                        entry.FullPath,
+                        operationUsn: null,
+                        exception,
+                        new CloudRecursiveOperationResult(results));
+                }
+
                 results.Add(CreateRecursiveResult(
                     entry,
-                    CloudItemOperationStatus.NotProcessed,
+                    CloudItemOperationStatus.Succeeded,
                     error: null));
-                continue;
             }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                DeleteLocalItem(entry.FullPath, entry.Kind, "CloudDirectory.DeleteTree");
-            }
-            catch (CloudFilesException exception)
-            {
-                results.Add(CreateRecursiveResult(
-                    entry,
-                    CloudItemOperationStatus.Failed,
-                    exception));
-                stopped = options.StopOnFirstFailure;
-                continue;
-            }
-
-            try
-            {
-                _ = await PersistTombstoneAsync(
-                    operation.StateStore,
-                    entry.RelativePath,
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                throw new CloudItemCoordinationException(
-                    "CloudDirectory.DeleteTree",
-                    entry.FullPath,
-                    operationUsn: null,
-                    exception);
-            }
-
-            results.Add(CreateRecursiveResult(
-                entry,
-                CloudItemOperationStatus.Succeeded,
-                error: null));
+        }
+        catch (OperationCanceledException exception)
+        {
+            throw new CloudRecursiveOperationCanceledException(
+                new CloudRecursiveOperationResult(results),
+                exception,
+                cancellationToken);
         }
 
         return new CloudRecursiveOperationResult(results);
@@ -298,7 +313,15 @@ public sealed partial class CloudFileSystem
         FileSystemInfo info = kind is CloudItemKind.Directory
             ? new DirectoryInfo(path)
             : new FileInfo(path);
-        return info.LinkTarget is not null;
+        if (info.LinkTarget is not null)
+        {
+            return true;
+        }
+
+        // LinkTarget is null for reparse points whose tag is unknown to the BCL. Fail closed for
+        // those points unless Cloud Files can positively identify its own placeholder tag; never
+        // recurse through an unclassified directory that might redirect outside the sync root.
+        return !CloudItemInspector.IsCloudPlaceholder(path);
     }
 
     private static int CompareEntryPaths(string left, string right)

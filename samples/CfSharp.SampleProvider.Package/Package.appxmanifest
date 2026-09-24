@@ -10,7 +10,7 @@
     <DisplayName>CfSharp Sample</DisplayName>
     <PublisherDisplayName>MirrorPulse Team</PublisherDisplayName>
     <Description>CfSharp Windows Cloud Files sample provider.</Description>
-    <Logo>Assets\Logo.png</Logo>
+    <Logo>Assets\Logo50.png</Logo>
   </Properties>
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
@@ -31,7 +31,7 @@
         Square150x150Logo="Assets\Logo.png"
         Square44x44Logo="Assets\Logo44.png" />
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="CfSharp.SampleProvider.exe">
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="CfSharp.SampleProvider\CfSharp.SampleProvider.exe">
           <desktop:FullTrustProcess />
         </desktop:Extension>
       </Extensions>

@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <IsPackable>true</IsPackable>
     <PackageId>CfSharp.Storage.Sqlite</PackageId>
     <Description>Official SQLite durable-state provider for CfSharp.</Description>

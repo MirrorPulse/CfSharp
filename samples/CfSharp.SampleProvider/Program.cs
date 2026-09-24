@@ -10,6 +10,7 @@ return await SampleProvider.RunAsync(args);
 
 internal static class SampleProvider
 {
+    private const int CloudRootNotRegisteredHResult = unchecked((int)0x80070186);
     private static readonly Guid ProviderId = new("BD3DAA90-BDEA-48E4-8257-A0C7D35A6803");
 
     internal static async Task<int> RunAsync(string[] args)
@@ -98,7 +99,9 @@ internal static class SampleProvider
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
             requestedSyncRootPath,
             "sync-root");
-        if (ShellSyncRootRegistrar.TryGetRegisteredPath(out string? existingShellPath) &&
+        bool shellRegistrationAlreadyExists =
+            ShellSyncRootRegistrar.TryGetRegisteredPath(out string? existingShellPath);
+        if (shellRegistrationAlreadyExists &&
             !string.Equals(
                 Path.GetFullPath(existingShellPath!),
                 syncRootPath,
@@ -108,11 +111,27 @@ internal static class SampleProvider
                 $"The CfSharp Sample Shell registration belongs to '{existingShellPath}', not '{syncRootPath}'.");
         }
 
-        CloudSyncRoot.Open(syncRootPath).Unregister();
+        try
+        {
+            CloudSyncRoot.Open(syncRootPath).Unregister();
+        }
+        catch (CloudFilesException exception) when (
+            shellRegistrationAlreadyExists &&
+            IsStaleCloudRootRegistration(exception))
+        {
+            Console.Error.WriteLine(
+                "The Cloud Files registration is already absent; removing the matching stale " +
+                "Shell registration while preserving all other native failures.");
+        }
+
         ShellSyncRootRegistrar.Unregister(syncRootPath);
         Console.WriteLine($"Unregistered CfSharp Sample from {syncRootPath}");
         return 0;
     }
+
+    internal static bool IsStaleCloudRootRegistration(CloudFilesException exception) =>
+        exception.Operation == "CloudSyncRoot.GetInfo" &&
+        exception.HResult == CloudRootNotRegisteredHResult;
 
     [SupportedOSPlatform("windows10.0.16299")]
     private static async Task<int> RunProviderAsync(SampleArguments options)

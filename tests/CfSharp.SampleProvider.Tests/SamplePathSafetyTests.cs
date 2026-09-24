@@ -87,6 +87,27 @@ public sealed class SamplePathSafetyTests
     }
 
     [Fact]
+    public void OnlyTheKnownMissingCloudRootStateIsTreatedAsStale()
+    {
+        CloudFilesException stale = CloudFilesException.FromHResult(
+            "CloudSyncRoot.GetInfo",
+            "C:\\CfSharpAcceptance\\sync-root",
+            unchecked((int)0x80070186));
+        CloudFilesException accessDenied = CloudFilesException.FromHResult(
+            "CloudSyncRoot.GetInfo",
+            "C:\\CfSharpAcceptance\\sync-root",
+            unchecked((int)0x80070005));
+        CloudFilesException differentOperation = CloudFilesException.FromHResult(
+            "CloudSyncRoot.Unregister",
+            "C:\\CfSharpAcceptance\\sync-root",
+            unchecked((int)0x80070186));
+
+        Assert.True(global::SampleProvider.IsStaleCloudRootRegistration(stale));
+        Assert.False(global::SampleProvider.IsStaleCloudRootRegistration(accessDenied));
+        Assert.False(global::SampleProvider.IsStaleCloudRootRegistration(differentOperation));
+    }
+
+    [Fact]
     public void ResolveContainedPathRejectsLexicalEscape()
     {
         using TemporaryDirectory root = new();

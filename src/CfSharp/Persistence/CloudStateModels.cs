@@ -87,7 +87,8 @@ public sealed class CloudStateStoreContext
 /// <summary>Represents immutable durable identity and revision state for one cloud item.</summary>
 /// <remarks>
 /// This value owns only managed immutable data and is safe for concurrent reads. Its relative
-/// path is expected to use the canonical form produced by CfSharp's path resolver.
+/// path is validated against CfSharp's Windows relative-path rules. Its directory-separator
+/// spelling is retained because state-store keys must remain compatible with existing stores.
 /// </remarks>
 public sealed class CloudItemState
 {
@@ -123,7 +124,10 @@ public sealed class CloudItemState
     /// <summary>Gets the provider-defined stable remote object identifier.</summary>
     public string RemoteId { get; }
 
-    /// <summary>Gets the canonical path relative to the owning sync root.</summary>
+    /// <summary>
+    /// Gets the validated path relative to the owning sync root. Existing separator spelling is
+    /// retained for state-store key compatibility.
+    /// </summary>
     public string RelativePath { get; }
 
     /// <summary>Gets whether the item is a file or directory.</summary>
@@ -403,7 +407,10 @@ public sealed class CloudEchoSuppressionState
     /// <summary>Gets the provider-originated operation kind.</summary>
     public CloudStateOperationKind Kind { get; }
 
-    /// <summary>Gets the canonical affected path relative to the sync root.</summary>
+    /// <summary>
+    /// Gets the validated affected path relative to the sync root. Existing separator spelling is
+    /// retained for state-store key compatibility.
+    /// </summary>
     public string RelativePath { get; }
 
     /// <summary>

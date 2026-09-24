@@ -139,6 +139,7 @@ internal static class SampleProvider
             shutdown.Cancel();
         };
         Console.CancelKeyPress += cancelHandler;
+        using ActivityListener? diagnostics = SampleDiagnostics.TryEnable();
         try
         {
             await fileSystem.StartAsync(shutdown.Token);

@@ -721,11 +721,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
             if (gateEntered)
             {
+                // Keep the per-directory gate in the session cache until native shutdown. Removing
+                // it here permits a queued request to observe a newly-created semaphore while the
+                // old one is still held, defeating population serialization.
                 populationGate!.Release();
-                _directoryPopulationGates.TryRemove(
-                    new KeyValuePair<string, SemaphoreSlim>(
-                        activeRequest.Request.NormalizedPath,
-                        populationGate));
             }
 
             RemovePlaceholderRequest(activeRequest);
@@ -2348,6 +2347,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private unsafe void ReleaseNativeState()
     {
+        foreach (SemaphoreSlim gate in _directoryPopulationGates.Values)
+        {
+            gate.Dispose();
+        }
+
+        _directoryPopulationGates.Clear();
+
         if (_callbackContext.IsAllocated)
         {
             _callbackContext.Free();

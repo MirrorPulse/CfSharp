@@ -5,6 +5,7 @@
 [Bb]in/
 [Oo]bj/
 /artifacts/
+/samples/CfSharp.SampleProvider.Package/AppPackages/
 /TestResults/
 *.trx
 *.coverage

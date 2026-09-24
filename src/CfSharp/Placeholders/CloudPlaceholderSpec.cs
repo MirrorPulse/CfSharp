@@ -3,6 +3,8 @@ namespace CfSharp;
 /// <summary>Describes one immutable child placeholder to create.</summary>
 public abstract class CloudPlaceholderSpec
 {
+    private const int MaximumNameLength = 255;
+
     private protected CloudPlaceholderSpec(
         string name,
         CloudItemKind kind,
@@ -40,7 +42,8 @@ public abstract class CloudPlaceholderSpec
     internal static string ValidateName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        if (name is "." or ".." ||
+        if (name.Length > MaximumNameLength ||
+            name is "." or ".." ||
             name.EndsWith(' ') ||
             name.EndsWith('.') ||
             name.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 ||
@@ -71,7 +74,7 @@ public abstract class CloudPlaceholderSpec
     private static bool IsNumberedDeviceName(ReadOnlySpan<char> name, string prefix) =>
         name.Length == 4 &&
         name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-        name[3] is >= '1' and <= '9';
+        (name[3] is >= '1' and <= '9' or '\u00b9' or '\u00b2' or '\u00b3');
 }
 
 /// <summary>Describes one file placeholder to create.</summary>

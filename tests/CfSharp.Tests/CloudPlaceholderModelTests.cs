@@ -112,6 +112,12 @@ public sealed class CloudPlaceholderModelTests
         Assert.Throws<ArgumentException>(() => CloudFilePlaceholderSpec
             .CreateBuilder("CON.txt", "remote", 1)
             .Build());
+        Assert.Throws<ArgumentException>(() => CloudFilePlaceholderSpec
+            .CreateBuilder("COM¹", "remote", 1)
+            .Build());
+        Assert.Throws<ArgumentException>(() => CloudFilePlaceholderSpec
+            .CreateBuilder(new string('x', 256), "remote", 1)
+            .Build());
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             CloudFilePlaceholderSpec.CreateBuilder("report.pdf", "remote", -1));
         Assert.Throws<ArgumentException>(() => fileBuilder.WithMetadata(

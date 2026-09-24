@@ -6,6 +6,7 @@ namespace CfSharp.Native;
 internal static unsafe class NativeSyncRoot
 {
     private const int MaxSyncRootIdentityLength = 64 * 1024;
+    private const int MoreDataHResult = unchecked((int)0x800700EA);
 
     internal static int Register(
         string path,
@@ -43,47 +44,79 @@ internal static unsafe class NativeSyncRoot
     {
         CfSyncRootStandardInfo layout = default;
         int identityOffset = checked((int)(layout.SyncRootIdentity - (byte*)&layout));
-        byte[] buffer = GC.AllocateUninitializedArray<byte>(
-            identityOffset + MaxSyncRootIdentityLength);
-
-        fixed (char* pathPointer = path)
-        fixed (byte* bufferPointer = buffer)
+        int bufferLength = checked(identityOffset + 1024);
+        while (true)
         {
-            uint returnedLength;
-            int result = CfApi.CfGetSyncRootInfoByPath(
-                pathPointer,
-                CfSyncRootInfoClass.Standard,
-                bufferPointer,
-                (uint)buffer.Length,
-                &returnedLength);
-            if (result < 0)
+            byte[] buffer = GC.AllocateUninitializedArray<byte>(bufferLength);
+            fixed (char* pathPointer = path)
+            fixed (byte* bufferPointer = buffer)
             {
-                info = null;
+                uint returnedLength;
+                int result = CfApi.CfGetSyncRootInfoByPath(
+                    pathPointer,
+                    CfSyncRootInfoClass.Standard,
+                    bufferPointer,
+                    (uint)buffer.Length,
+                    &returnedLength);
+                if (result == MoreDataHResult)
+                {
+                    if (returnedLength <= buffer.Length || returnedLength > identityOffset + MaxSyncRootIdentityLength)
+                    {
+                        throw new InvalidDataException(
+                            "Windows returned an invalid sync-root information size.");
+                    }
+
+                    bufferLength = checked((int)returnedLength);
+                    continue;
+                }
+
+                if (result < 0)
+                {
+                    info = null;
+                    return result;
+                }
+
+                CfSyncRootStandardInfo* nativeInfo = (CfSyncRootStandardInfo*)bufferPointer;
+                if (returnedLength < identityOffset ||
+                    nativeInfo->SyncRootIdentityLength > MaxSyncRootIdentityLength)
+                {
+                    throw new InvalidDataException(
+                        "Windows returned an invalid variable-length sync-root identity.");
+                }
+
+                int identityLength = checked((int)nativeInfo->SyncRootIdentityLength);
+                int requiredLength = checked(identityOffset + identityLength);
+                if (requiredLength > buffer.Length || requiredLength > returnedLength)
+                {
+                    throw new InvalidDataException(
+                        "Windows returned an invalid variable-length sync-root identity.");
+                }
+
+                info = new NativeSyncRootInfo(
+                    nativeInfo->SyncRootFileId,
+                    nativeInfo->HydrationPolicy,
+                    nativeInfo->PopulationPolicy,
+                    nativeInfo->InSyncPolicy,
+                    nativeInfo->HardLinkPolicy,
+                    nativeInfo->ProviderStatus,
+                    ReadFixedString(nativeInfo->ProviderName, CfApi.MaxProviderNameLength + 1),
+                    ReadFixedString(nativeInfo->ProviderVersion, CfApi.MaxProviderVersionLength + 1),
+                    new ReadOnlySpan<byte>(nativeInfo->SyncRootIdentity, identityLength).ToArray());
                 return result;
             }
-
-            CfSyncRootStandardInfo* nativeInfo = (CfSyncRootStandardInfo*)bufferPointer;
-            int identityLength = checked((int)nativeInfo->SyncRootIdentityLength);
-            if (identityLength > MaxSyncRootIdentityLength ||
-                identityOffset + identityLength > buffer.Length ||
-                identityOffset + identityLength > returnedLength)
-            {
-                throw new InvalidDataException(
-                    "Windows returned an invalid variable-length sync-root identity.");
-            }
-
-            info = new NativeSyncRootInfo(
-                nativeInfo->SyncRootFileId,
-                nativeInfo->HydrationPolicy,
-                nativeInfo->PopulationPolicy,
-                nativeInfo->InSyncPolicy,
-                nativeInfo->HardLinkPolicy,
-                nativeInfo->ProviderStatus,
-                new string(nativeInfo->ProviderName),
-                new string(nativeInfo->ProviderVersion),
-                new ReadOnlySpan<byte>(nativeInfo->SyncRootIdentity, identityLength).ToArray());
-            return result;
         }
+    }
+
+    private static string ReadFixedString(char* value, int capacity)
+    {
+        ReadOnlySpan<char> span = new(value, capacity);
+        int terminator = span.IndexOf('\0');
+        if (terminator < 0)
+        {
+            throw new InvalidDataException("Windows returned an unterminated sync-root string.");
+        }
+
+        return new string(span[..terminator]);
     }
 
     internal static int Unregister(string path)

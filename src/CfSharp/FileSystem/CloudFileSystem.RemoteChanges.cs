@@ -753,10 +753,27 @@ public sealed partial class CloudFileSystem
 
         if (!exists)
         {
-            return RemoteEntryOutcome.ConflictResult(CreateConflict(
-                change,
-                localState,
-                CloudRemoteConflictReason.MissingItem));
+            if (options.PreserveUnsynchronizedLocalContent && context.LocalOperations.Count != 0)
+            {
+                return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                    change,
+                    localState,
+                    CloudRemoteConflictReason.Delete));
+            }
+
+            // The native delete may have committed before durable tombstone persistence failed.
+            // A missing namespace entry with the expected durable identity is therefore an
+            // idempotent retry, not a new missing-item conflict; only finish the durable update.
+            await UpdateRemoteItemRevisionAsync(
+                    localState.ItemId,
+                    change.RemoteId,
+                    localState.RelativePath,
+                    change.ItemKind,
+                    change.RemoteRevision,
+                    isTombstone: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return RemoteEntryOutcome.AppliedResult;
         }
 
         if (options.PreserveUnsynchronizedLocalContent && context.LocalOperations.Count != 0)

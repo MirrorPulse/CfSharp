@@ -26,6 +26,20 @@ public sealed class CloudProviderDemandModelTests
     }
 
     [Fact]
+    public void CanceledDirectoryContinuationCanBeDiscarded()
+    {
+        System.Collections.Concurrent.ConcurrentDictionary<string, string> continuations =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["\\directory"] = "next",
+            };
+
+        Assert.True(CloudProviderSession.TryRemoveDirectoryContinuation(continuations, "\\directory"));
+        Assert.False(continuations.ContainsKey("\\directory"));
+        Assert.False(CloudProviderSession.TryRemoveDirectoryContinuation(continuations, "\\directory"));
+    }
+
+    [Fact]
     public void DirectoryPageCopiesAndValidatesChildren()
     {
         CloudFilePlaceholderSpec child = CloudFilePlaceholderSpec.CreateBuilder(

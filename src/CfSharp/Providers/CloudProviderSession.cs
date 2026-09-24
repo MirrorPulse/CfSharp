@@ -709,7 +709,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             // A canceled population request did not publish a page. Drop its in-memory token so
             // a later request restarts from the durable checkpoint (if one exists) instead of
             // retaining an abandoned continuation indefinitely.
-            _directoryContinuations.TryRemove(activeRequest.Request.NormalizedPath, out _);
+            TryRemoveDirectoryContinuation(
+                _directoryContinuations,
+                activeRequest.Request.NormalizedPath);
             SendPlaceholderFailure(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
         catch (Exception)
@@ -1481,6 +1483,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     internal bool HasDirectoryContinuationForTesting(string path) =>
         _directoryContinuations.ContainsKey(path);
+
+    internal static bool TryRemoveDirectoryContinuation(
+        ConcurrentDictionary<string, string> continuations,
+        string path) =>
+        continuations.TryRemove(path, out _);
 
     private static async ValueTask<int> ReadExactlyAsync(
         Stream source,

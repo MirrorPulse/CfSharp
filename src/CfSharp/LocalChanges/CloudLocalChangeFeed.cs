@@ -428,6 +428,14 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
                 }
             }
 
+            // A producer can lose the race with channel completion after the last queued event
+            // has been drained. Persist the overflow marker at this final clean-shutdown boundary
+            // instead of leaving it only in process memory.
+            if (Interlocked.Exchange(ref _overflowSignaled, 0) != 0)
+            {
+                await MarkRescanRequiredAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
             if (_pendingRename is not null)
             {
                 _pendingRename = null;

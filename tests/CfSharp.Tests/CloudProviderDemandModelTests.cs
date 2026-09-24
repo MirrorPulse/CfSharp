@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 
 namespace CfSharp.Tests;
 
+[SupportedOSPlatform("windows10.0.16299")]
 public sealed class CloudProviderDemandModelTests
 {
     [Fact]
@@ -11,6 +12,17 @@ public sealed class CloudProviderDemandModelTests
             new CloudProviderSessionOptions { QueueCapacity = 0 }.Validate());
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new CloudProviderSessionOptions { TransferChunkSize = 5000 }.Validate());
+    }
+
+    [Fact]
+    public void FetchDataBufferSizeClampsBeforeConvertingLargeRequestLength()
+    {
+        Assert.Equal(
+            64 * 1024,
+            CloudProviderSession.GetTransferBufferSize(64 * 1024, (long)int.MaxValue + 1));
+        Assert.Equal(
+            4096,
+            CloudProviderSession.GetTransferBufferSize(64 * 1024, 4096));
     }
 
     [Fact]

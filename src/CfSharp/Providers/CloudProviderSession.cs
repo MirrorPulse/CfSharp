@@ -550,7 +550,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             }
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(
-                Math.Min(_options.TransferChunkSize, checked((int)activeRequest.Request.Length)));
+                GetTransferBufferSize(_options.TransferChunkSize, activeRequest.Request.Length));
             try
             {
                 long offset = activeRequest.Request.Offset;
@@ -1488,6 +1488,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
 
         return total;
+    }
+
+    internal static int GetTransferBufferSize(int transferChunkSize, long requestLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(transferChunkSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(requestLength);
+        return checked((int)Math.Min((long)transferChunkSize, requestLength));
     }
 
     private static unsafe void SendData(

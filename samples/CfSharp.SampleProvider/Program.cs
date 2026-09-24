@@ -328,14 +328,14 @@ internal static class SampleProvider
 
         private string ResolveSourcePath(string normalizedPath)
         {
-            string relativePath = normalizedPath;
-            if (Path.IsPathRooted(relativePath) &&
-                relativePath.StartsWith(_syncRootPath, StringComparison.OrdinalIgnoreCase))
+            string callbackPath = SamplePathSafety.ResolveSyncRootCallbackPath(
+                _syncRootPath,
+                normalizedPath);
+            string relativePath = Path.GetRelativePath(_syncRootPath, callbackPath);
+            if (relativePath == ".")
             {
-                relativePath = Path.GetRelativePath(_syncRootPath, relativePath);
+                relativePath = string.Empty;
             }
-
-            relativePath = relativePath.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string sourcePath = SamplePathSafety.ResolveContainedPath(
                 _rootPath,
                 Path.Combine(_rootPath, relativePath));

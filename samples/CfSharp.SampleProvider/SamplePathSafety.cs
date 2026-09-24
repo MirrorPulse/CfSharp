@@ -29,6 +29,53 @@ internal static class SamplePathSafety
         return candidate;
     }
 
+    internal static string ResolveSyncRootCallbackPath(string syncRootPath, string normalizedPath)
+    {
+        string syncRoot = Path.TrimEndingDirectorySeparator(
+            NormalizeFullPath(syncRootPath, nameof(syncRootPath)));
+        if (string.IsNullOrWhiteSpace(normalizedPath) ||
+            (normalizedPath.Length == 1 &&
+                (normalizedPath[0] == Path.DirectorySeparatorChar ||
+                    normalizedPath[0] == Path.AltDirectorySeparatorChar)))
+        {
+            return syncRoot;
+        }
+
+        string rootPrefix = syncRoot + Path.DirectorySeparatorChar;
+        string candidate;
+        if (Path.IsPathFullyQualified(normalizedPath))
+        {
+            candidate = Path.GetFullPath(normalizedPath);
+        }
+        else if (normalizedPath.StartsWith(Path.DirectorySeparatorChar) ||
+            normalizedPath.StartsWith(Path.AltDirectorySeparatorChar))
+        {
+            string relative = normalizedPath.TrimStart(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            string driveCandidate = Path.GetFullPath(Path.Combine(
+                Path.GetPathRoot(syncRoot) ?? syncRoot,
+                relative));
+            candidate = driveCandidate.Equals(syncRoot, StringComparison.OrdinalIgnoreCase) ||
+                driveCandidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                ? driveCandidate
+                : Path.GetFullPath(Path.Combine(syncRoot, relative));
+        }
+        else
+        {
+            candidate = Path.GetFullPath(Path.Combine(syncRoot, normalizedPath));
+        }
+
+        if (!candidate.Equals(syncRoot, StringComparison.OrdinalIgnoreCase) &&
+            !candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"The callback path '{normalizedPath}' is outside the sync root '{syncRoot}'.");
+        }
+
+        return candidate;
+    }
+
     internal static void RejectReparsePoints(string path)
     {
         string fullPath = NormalizeFullPath(path, nameof(path));

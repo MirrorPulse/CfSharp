@@ -108,6 +108,33 @@ public sealed class SamplePathSafetyTests
             SamplePathSafety.ResolveContainedPath(root.Path, Path.Combine(link, "file.txt")));
     }
 
+    [Fact]
+    public void ResolveSyncRootCallbackPathMapsRootRelativeCallbacksToTheSyncRootVolume()
+    {
+        using TemporaryDirectory syncRoot = new();
+        string relativeToVolume = Path.GetRelativePath(
+            Path.GetPathRoot(syncRoot.Path)!,
+            syncRoot.Path);
+        string callbackPath = Path.DirectorySeparatorChar +
+            relativeToVolume.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+
+        string resolved = SamplePathSafety.ResolveSyncRootCallbackPath(
+            syncRoot.Path,
+            callbackPath);
+
+        Assert.Equal(syncRoot.Path, resolved, ignoreCase: true);
+    }
+
+    [Fact]
+    public void ResolveSyncRootCallbackPathRejectsAbsolutePathOutsideTheSyncRoot()
+    {
+        using TemporaryDirectory syncRoot = new();
+        string outside = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+
+        Assert.Throws<InvalidDataException>(() =>
+            SamplePathSafety.ResolveSyncRootCallbackPath(syncRoot.Path, outside));
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         internal TemporaryDirectory()

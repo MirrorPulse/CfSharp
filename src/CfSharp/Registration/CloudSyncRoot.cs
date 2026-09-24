@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using CfSharp.Native;
+using Microsoft.Win32.SafeHandles;
 
 namespace CfSharp;
 
@@ -220,6 +221,35 @@ public sealed partial class CloudSyncRoot
         }
 
         string normalizedRelativePath = resolvedPath.RelativePath;
+        using CloudPathHandleLease pathLease = CloudPathHandleLease.OpenDirectoryChain(Path, parentPath);
+        SafeFileHandle? existingTarget = null;
+        try
+        {
+            if (File.Exists(targetPath) || Directory.Exists(targetPath))
+            {
+                existingTarget = CloudPathHandleLease.OpenExistingItem(
+                    targetPath,
+                    Directory.Exists(targetPath));
+            }
+
+            return CreateFilePlaceholderCore(
+                targetPath,
+                normalizedRelativePath,
+                fileSize,
+                fileIdentity);
+        }
+        finally
+        {
+            existingTarget?.Dispose();
+        }
+    }
+
+    private unsafe CloudPlaceholderCreationResult CreateFilePlaceholderCore(
+        string targetPath,
+        string normalizedRelativePath,
+        long fileSize,
+        ReadOnlySpan<byte> fileIdentity)
+    {
         fixed (char* rootPathPointer = Path)
         fixed (char* relativePathPointer = normalizedRelativePath)
         fixed (byte* identityPointer = fileIdentity)

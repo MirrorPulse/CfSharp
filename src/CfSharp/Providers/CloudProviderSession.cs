@@ -706,6 +706,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+            // A canceled population request did not publish a page. Drop its in-memory token so
+            // a later request restarts from the durable checkpoint (if one exists) instead of
+            // retaining an abandoned continuation indefinitely.
+            _directoryContinuations.TryRemove(activeRequest.Request.NormalizedPath, out _);
             SendPlaceholderFailure(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
         catch (Exception)

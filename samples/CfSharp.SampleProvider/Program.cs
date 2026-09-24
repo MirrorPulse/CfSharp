@@ -61,7 +61,8 @@ internal static class SampleProvider
         string syncRootPath = Path.GetFullPath(requestedSyncRootPath);
         Directory.CreateDirectory(syncRootPath);
         syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
-        await ShellSyncRootRegistrar.RegisterAsync(syncRootPath);
+        bool shellRegistrationAlreadyExisted =
+            await ShellSyncRootRegistrar.RegisterAsync(syncRootPath);
         CloudSyncRoot syncRoot;
         try
         {
@@ -69,14 +70,17 @@ internal static class SampleProvider
         }
         catch
         {
-            try
+            if (!shellRegistrationAlreadyExisted)
             {
-                ShellSyncRootRegistrar.Unregister();
-            }
-            catch
-            {
-                // Preserve the original CFAPI failure; the unregister command can remove
-                // the Shell registration if Windows rejected the compensating cleanup.
+                try
+                {
+                    ShellSyncRootRegistrar.Unregister(syncRootPath);
+                }
+                catch
+                {
+                    // Preserve the original CFAPI failure; the unregister command can remove
+                    // the Shell registration if Windows rejected the compensating cleanup.
+                }
             }
 
             throw;
@@ -94,8 +98,18 @@ internal static class SampleProvider
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
             requestedSyncRootPath,
             "sync-root");
+        if (ShellSyncRootRegistrar.TryGetRegisteredPath(out string? existingShellPath) &&
+            !string.Equals(
+                Path.GetFullPath(existingShellPath!),
+                syncRootPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"The CfSharp Sample Shell registration belongs to '{existingShellPath}', not '{syncRootPath}'.");
+        }
+
         CloudSyncRoot.Open(syncRootPath).Unregister();
-        ShellSyncRootRegistrar.Unregister();
+        ShellSyncRootRegistrar.Unregister(syncRootPath);
         Console.WriteLine($"Unregistered CfSharp Sample from {syncRootPath}");
         return 0;
     }

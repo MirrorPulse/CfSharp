@@ -20,6 +20,20 @@ public sealed class SamplePathSafetyTests
     }
 
     [Fact]
+    [SupportedOSPlatform("windows10.0.19041")]
+    public void ShellRegistrationLookupIsSafeWhenTheSampleIsNotRegistered()
+    {
+        if (ShellSyncRootRegistrar.TryGetRegisteredPath(out string? path))
+        {
+            Assert.False(string.IsNullOrWhiteSpace(path));
+        }
+        else
+        {
+            Assert.Null(path);
+        }
+    }
+
+    [Fact]
     public void ArgumentsRequireAnExplicitCommandAndStateDatabase()
     {
         Assert.False(SampleArguments.TryParse([], out _, out _));

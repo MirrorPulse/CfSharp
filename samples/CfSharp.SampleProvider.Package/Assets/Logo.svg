@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150" viewBox="0 0 150 150" role="img" aria-label="CfSharp Sample">
+  <rect width="150" height="150" rx="24" fill="#1464A5" />
+  <path d="M39 75c0-20 16-36 36-36h36v18H75c-10 0-18 8-18 18s8 18 18 18h36v18H75c-20 0-36-16-36-36Z" fill="#fff" />
+  <circle cx="75" cy="75" r="8" fill="#1464A5" />
+</svg>

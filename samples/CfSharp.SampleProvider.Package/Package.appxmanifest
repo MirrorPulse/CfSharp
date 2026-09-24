@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop rescap">
+  <Identity Name="CfSharp.Sample" Publisher="CN=MirrorPulse Team" Version="0.1.0.0" />
+  <Properties>
+    <DisplayName>CfSharp Sample</DisplayName>
+    <PublisherDisplayName>MirrorPulse Team</PublisherDisplayName>
+    <Description>CfSharp Windows Cloud Files sample provider.</Description>
+    <Logo>Assets\Logo.svg</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application
+      Id="App"
+      Executable="CfSharp.SampleProvider.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        AppListEntry="none"
+        DisplayName="CfSharp Sample"
+        Description="CfSharp Windows Cloud Files sample provider"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Logo.svg"
+        Square44x44Logo="Assets\Logo.svg" />
+      <Extensions>
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="CfSharp.SampleProvider.exe">
+          <desktop:FullTrustProcess />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

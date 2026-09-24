@@ -9,6 +9,29 @@ using CfSharp.Native;
 
 namespace CfSharp;
 
+/// <summary>
+/// Identifies one callback operation in the scope in which Windows guarantees its opaque keys.
+/// </summary>
+/// <remarks>
+/// <see cref="CfRequestKey"/> is only unique for the cloud file identified by its transfer key;
+/// using it by itself would merge concurrent callbacks that legitimately use the default request
+/// key. The connection key is included so the registry remains correct if a session abstraction
+/// is ever expanded to cover more than one native connection.
+/// </remarks>
+internal readonly record struct CloudProviderRequestRegistryKey(
+    long ConnectionKey,
+    long TransferKey,
+    long RequestKey)
+{
+    internal static CloudProviderRequestRegistryKey Create(
+        CfConnectionKey connectionKey,
+        CfTransferKey transferKey,
+        CfRequestKey requestKey) => new(
+            connectionKey.Internal,
+            transferKey.Internal,
+            requestKey.Internal);
+}
+
 /// <summary>Owns a process-scoped provider connection that hydrates file placeholders.</summary>
 /// <remarks>
 /// <para>
@@ -35,8 +58,8 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private readonly string _syncRootPath;
     private readonly object _lifecycleGate = new();
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly ConcurrentDictionary<long, ActiveRequest> _requests = new();
-    private readonly ConcurrentDictionary<long, CallbackRequest> _callbackRequests = new();
+    private readonly ConcurrentDictionary<CloudProviderRequestRegistryKey, ActiveRequest> _requests = new();
+    private readonly ConcurrentDictionary<CloudProviderRequestRegistryKey, CallbackRequest> _callbackRequests = new();
     private readonly ConcurrentDictionary<long, NotificationRequest> _notificationRequests = new();
     private readonly ConcurrentDictionary<string, string> _directoryContinuations = new(
         StringComparer.OrdinalIgnoreCase);
@@ -489,7 +512,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             request,
             cancellation);
 
-        long requestKeyValue = requestKey.Internal;
+        CloudProviderRequestRegistryKey registryKey = CloudProviderRequestRegistryKey.Create(
+            connectionKey,
+            transferKey,
+            requestKey);
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -498,7 +524,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_requests.TryAdd(requestKeyValue, activeRequest))
+            if (!_requests.TryAdd(registryKey, activeRequest))
             {
                 CompleteRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -620,7 +646,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             request,
             cancellation);
 
-        long requestKey = ReadRequestKey(callbackInfo).Internal;
+        CloudProviderRequestRegistryKey registryKey = CloudProviderRequestRegistryKey.Create(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            ReadRequestKey(callbackInfo));
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -629,7 +658,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            if (!_callbackRequests.TryAdd(registryKey, activeRequest))
             {
                 CompletePlaceholderRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -928,7 +957,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             ReadRequestKey(callbackInfo),
             request,
             cancellation);
-        long requestKey = ReadRequestKey(callbackInfo).Internal;
+        CloudProviderRequestRegistryKey registryKey = CloudProviderRequestRegistryKey.Create(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            ReadRequestKey(callbackInfo));
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -937,7 +969,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            if (!_callbackRequests.TryAdd(registryKey, activeRequest))
             {
                 CompleteValidationRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -1197,7 +1229,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private void EnqueuePolicyRequest(PolicyRequest activeRequest)
     {
-        long requestKey = activeRequest.RequestKey.Internal;
+        CloudProviderRequestRegistryKey registryKey = activeRequest.RegistryKey;
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -1206,7 +1238,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (!_callbackRequests.TryAdd(requestKey, activeRequest))
+            if (!_callbackRequests.TryAdd(registryKey, activeRequest))
             {
                 CompletePolicyRequest(activeRequest, NtStatus.CloudFileUnsuccessful);
                 return;
@@ -1367,7 +1399,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     {
         ((ICollection<KeyValuePair<long, NotificationRequest>>)_notificationRequests).Remove(
             new KeyValuePair<long, NotificationRequest>(
-                activeRequest.RegistryKey,
+                activeRequest.NotificationRegistryKey,
                 activeRequest));
         activeRequest.DisposeCancellation();
     }
@@ -1989,9 +2021,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private void RemoveRequest(ActiveRequest activeRequest)
     {
-        ((ICollection<KeyValuePair<long, ActiveRequest>>)_requests).Remove(
-            new KeyValuePair<long, ActiveRequest>(
-                activeRequest.RequestKey.Internal,
+        ((ICollection<KeyValuePair<CloudProviderRequestRegistryKey, ActiveRequest>>)_requests).Remove(
+            new KeyValuePair<CloudProviderRequestRegistryKey, ActiveRequest>(
+                activeRequest.RegistryKey,
                 activeRequest));
         activeRequest.DisposeCancellation();
     }
@@ -2019,23 +2051,25 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private void RemoveCallbackRequest(CallbackRequest activeRequest)
     {
-        ((ICollection<KeyValuePair<long, CallbackRequest>>)_callbackRequests).Remove(
-            new KeyValuePair<long, CallbackRequest>(
-                activeRequest.RequestKey.Internal,
+        ((ICollection<KeyValuePair<CloudProviderRequestRegistryKey, CallbackRequest>>)_callbackRequests).Remove(
+            new KeyValuePair<CloudProviderRequestRegistryKey, CallbackRequest>(
+                activeRequest.RegistryKey,
                 activeRequest));
         activeRequest.DisposeCancellation();
     }
 
     private unsafe void CancelRequest(CfCallbackInfo* callbackInfo)
     {
-        if (_requests.TryGetValue(ReadRequestKey(callbackInfo).Internal, out ActiveRequest? request))
+        CloudProviderRequestRegistryKey registryKey = CloudProviderRequestRegistryKey.Create(
+            callbackInfo->ConnectionKey,
+            callbackInfo->TransferKey,
+            ReadRequestKey(callbackInfo));
+        if (_requests.TryGetValue(registryKey, out ActiveRequest? request))
         {
             request.Cancel();
         }
 
-        if (_callbackRequests.TryGetValue(
-            ReadRequestKey(callbackInfo).Internal,
-            out CallbackRequest? callbackRequest))
+        if (_callbackRequests.TryGetValue(registryKey, out CallbackRequest? callbackRequest))
         {
             callbackRequest.Cancel();
         }
@@ -2424,6 +2458,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
         internal CfRequestKey RequestKey { get; }
 
+        internal CloudProviderRequestRegistryKey RegistryKey =>
+            CloudProviderRequestRegistryKey.Create(ConnectionKey, TransferKey, RequestKey);
+
         internal CloudFileFetchRequest Request { get; }
 
         internal CancellationTokenSource Cancellation { get; }
@@ -2484,6 +2521,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         internal CfTransferKey TransferKey { get; }
 
         internal CfRequestKey RequestKey { get; }
+
+        internal CloudProviderRequestRegistryKey RegistryKey =>
+            CloudProviderRequestRegistryKey.Create(ConnectionKey, TransferKey, RequestKey);
 
         internal CancellationTokenSource Cancellation { get; }
 
@@ -2593,11 +2633,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             : base(connectionKey, transferKey, requestKey, cancellation)
         {
             Notification = notification;
-            RegistryKey = registryKey;
+            NotificationRegistryKey = registryKey;
         }
 
         internal CloudProviderCompletionNotification Notification { get; }
 
-        internal long RegistryKey { get; }
+        internal long NotificationRegistryKey { get; }
     }
 }

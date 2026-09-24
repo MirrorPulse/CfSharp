@@ -60,6 +60,21 @@ public sealed class CloudProviderDemandModelTests
     }
 
     [Fact]
+    public void RequestRegistryKeyScopesRequestKeyToTransferAndConnection()
+    {
+        CloudProviderRequestRegistryKey first = CloudProviderRequestRegistryKey.Create(
+            new CfConnectionKey { Internal = 1 },
+            new CfTransferKey { Internal = 2 },
+            new CfRequestKey { Internal = 0 });
+        CloudProviderRequestRegistryKey second = CloudProviderRequestRegistryKey.Create(
+            new CfConnectionKey { Internal = 1 },
+            new CfTransferKey { Internal = 3 },
+            new CfRequestKey { Internal = 0 });
+
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
     public void DirectoryPageCopiesAndValidatesChildren()
     {
         CloudFilePlaceholderSpec child = CloudFilePlaceholderSpec.CreateBuilder(

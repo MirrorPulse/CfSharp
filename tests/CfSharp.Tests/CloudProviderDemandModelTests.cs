@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
+using CfSharp.Native;
 
 namespace CfSharp.Tests;
 
@@ -37,6 +40,23 @@ public sealed class CloudProviderDemandModelTests
         Assert.True(CloudProviderSession.TryRemoveDirectoryContinuation(continuations, "\\directory"));
         Assert.False(continuations.ContainsKey("\\directory"));
         Assert.False(CloudProviderSession.TryRemoveDirectoryContinuation(continuations, "\\directory"));
+    }
+
+    [Fact]
+    public unsafe void RequestKeyReadIsBoundedByCallbackStructSize()
+    {
+        CfCallbackInfo callback = new()
+        {
+            StructSize = checked((uint)sizeof(CfCallbackInfo)),
+            RequestKey = new CfRequestKey { Internal = 42 },
+        };
+
+        Assert.Equal(42, CloudProviderSession.ReadRequestKey(&callback).Internal);
+
+        callback.StructSize = checked((uint)Marshal
+            .OffsetOf<CfCallbackInfo>(nameof(CfCallbackInfo.RequestKey))
+            .ToInt32());
+        Assert.Equal(0, CloudProviderSession.ReadRequestKey(&callback).Internal);
     }
 
     [Fact]

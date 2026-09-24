@@ -1259,7 +1259,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, length).ToArray();
     }
 
-    private static unsafe CfRequestKey ReadRequestKey(CfCallbackInfo* callbackInfo)
+    internal static unsafe CfRequestKey ReadRequestKey(CfCallbackInfo* callbackInfo)
     {
         int offset = Marshal.OffsetOf<CfCallbackInfo>(nameof(CfCallbackInfo.RequestKey)).ToInt32();
         uint requiredSize = checked((uint)(offset + sizeof(CfRequestKey)));

@@ -507,26 +507,39 @@ public sealed partial class CloudFileSystem
         // Register suppression only after all conflict checks that can return
         // without mutating the namespace. A conflict must not leave behind a
         // record that could consume an unrelated future local observation.
-        if (options.SuppressLocalEcho)
+        Guid? suppressionId = null;
+        try
         {
-            await RegisterRemoteEchoSuppressionAsync(
-                    change,
-                    itemId,
-                    suppressionKind,
-                    options,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+            if (options.SuppressLocalEcho)
+            {
+                suppressionId = await RegisterRemoteEchoSuppressionAsync(
+                        change,
+                        itemId,
+                        suppressionKind,
+                        options,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
-        if (context.LocalState is null || !localExists)
-        {
-            await CreateRemotePlaceholderAsync(change, itemId, cancellationToken)
-                .ConfigureAwait(false);
+            if (context.LocalState is null || !localExists)
+            {
+                await CreateRemotePlaceholderAsync(change, itemId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await UpdateRemotePlaceholderAsync(change, context.LocalState!, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
-        else
+        catch
         {
-            await UpdateRemotePlaceholderAsync(change, context.LocalState!, cancellationToken)
-                .ConfigureAwait(false);
+            if (suppressionId is Guid registeredSuppressionId)
+            {
+                await RemoveRemoteEchoSuppressionAsync(registeredSuppressionId).ConfigureAwait(false);
+            }
+
+            throw;
         }
 
         return RemoteEntryOutcome.AppliedResult;
@@ -616,9 +629,10 @@ public sealed partial class CloudFileSystem
         string destinationParentPath = Path.GetDirectoryName(change.RelativePath) ?? string.Empty;
         CloudDirectory destination = GetDirectory(destinationParentPath);
         string destinationName = Path.GetFileName(change.RelativePath);
+        Guid? suppressionId = null;
         if (options.SuppressLocalEcho)
         {
-            await RegisterRemoteEchoSuppressionAsync(
+            suppressionId = await RegisterRemoteEchoSuppressionAsync(
                     change,
                     localState.ItemId,
                     CloudStateOperationKind.Move,
@@ -627,12 +641,24 @@ public sealed partial class CloudFileSystem
                 .ConfigureAwait(false);
         }
 
-        await source.MoveToAsync(
-                destination,
-                destinationName,
-                CloudMoveOptions.Default,
-                cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            await source.MoveToAsync(
+                    destination,
+                    destinationName,
+                    CloudMoveOptions.Default,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            if (suppressionId is Guid registeredSuppressionId)
+            {
+                await RemoveRemoteEchoSuppressionAsync(registeredSuppressionId).ConfigureAwait(false);
+            }
+
+            throw;
+        }
         await UpdateRemoteItemRevisionAsync(
                 localState.ItemId,
                 change.RemoteId,
@@ -708,9 +734,10 @@ public sealed partial class CloudFileSystem
                 CloudRemoteConflictReason.Delete));
         }
 
+        Guid? suppressionId = null;
         if (options.SuppressLocalEcho)
         {
-            await RegisterRemoteEchoSuppressionAsync(
+            suppressionId = await RegisterRemoteEchoSuppressionAsync(
                     change,
                     localState.ItemId,
                     CloudStateOperationKind.Delete,
@@ -721,10 +748,24 @@ public sealed partial class CloudFileSystem
 
         if (item is CloudDirectory directory)
         {
-            CloudRecursiveOperationResult result = await directory.DeleteTreeAsync(
-                    new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            CloudRecursiveOperationResult result;
+            try
+            {
+                result = await directory.DeleteTreeAsync(
+                        new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (suppressionId is Guid registeredSuppressionId)
+                {
+                    await RemoveRemoteEchoSuppressionAsync(registeredSuppressionId).ConfigureAwait(false);
+                }
+
+                throw;
+            }
+
             if (!result.IsSuccessful)
             {
                 throw result.Entries.First(entry => entry.Error is not null).Error!;
@@ -732,7 +773,19 @@ public sealed partial class CloudFileSystem
         }
         else
         {
-            await item.DeleteAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await item.DeleteAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (suppressionId is Guid registeredSuppressionId)
+                {
+                    await RemoveRemoteEchoSuppressionAsync(registeredSuppressionId).ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
 
         await UpdateRemoteItemRevisionAsync(
@@ -784,19 +837,20 @@ public sealed partial class CloudFileSystem
             operations);
     }
 
-    private async ValueTask RegisterRemoteEchoSuppressionAsync(
+    private async ValueTask<Guid> RegisterRemoteEchoSuppressionAsync(
         CloudRemoteChange change,
         Guid itemId,
         CloudStateOperationKind kind,
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
+        Guid suppressionId = Guid.NewGuid();
         await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
                 "The cloud file system has no open state store.")).BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
         await transaction.EchoSuppressions.UpsertAsync(
             new CloudEchoSuppressionState(
-                Guid.NewGuid(),
+                suppressionId,
                 itemId,
                 kind,
                 change.RelativePath,
@@ -806,6 +860,25 @@ public sealed partial class CloudFileSystem
                 options.EchoSuppressionObservationCount),
             cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return suppressionId;
+    }
+
+    private async ValueTask RemoveRemoteEchoSuppressionAsync(Guid suppressionId)
+    {
+        try
+        {
+            await using ICloudStateTransaction transaction = await (_stateStore ?? throw new InvalidOperationException(
+                    "The cloud file system has no open state store.")).BeginTransactionAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+            await transaction.EchoSuppressions.RemoveAsync(suppressionId, CancellationToken.None)
+                .ConfigureAwait(false);
+            await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Preserve the original namespace failure; a later expiry cleanup can remove a
+            // record if the state store is temporarily unavailable during rollback.
+        }
     }
 
     private async ValueTask CreateRemotePlaceholderAsync(

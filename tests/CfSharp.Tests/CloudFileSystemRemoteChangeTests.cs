@@ -84,6 +84,49 @@ public sealed class CloudFileSystemRemoteChangeTests
     }
 
     [Fact]
+    public async Task MissingRemoteMetadataChangeDoesNotLeaveEchoSuppression()
+    {
+        string rootPath = CreateRoot();
+        try
+        {
+            ICloudStateStoreFactory factory = InMemoryCloudStateStoreContractTests.CreateFactoryForTesting();
+            CloudRemoteChange change = new(
+                "missing-metadata",
+                CloudRemoteChangeKind.MetadataUpdate,
+                "remote-missing",
+                "revision-1",
+                CloudItemKind.File,
+                "missing.txt",
+                metadata: CloudPlaceholderMetadata.CreateFileBuilder().Build());
+
+            await using (CloudFileSystem fileSystem = CloudFileSystem
+                .CreateBuilder(rootPath, new TestRuntime())
+                .WithStateStore(factory)
+                .Build())
+            {
+                await fileSystem.StartAsync();
+                CloudRemoteApplyResult result = await fileSystem.ApplyRemoteChangesAsync(
+                    new CloudRemoteChangeBatch(
+                        "missing-metadata-batch",
+                        Array.Empty<byte>(),
+                        [change],
+                        new byte[] { 1 }));
+
+                Assert.Equal(CloudRemoteApplyEntryStatus.Conflict, Assert.Single(result.Entries).Status);
+                Assert.Equal(CloudRemoteConflictReason.MissingItem, result.Entries[0].Conflict!.Reason);
+            }
+
+            await using ICloudStateStore store = await factory.OpenAsync(new CloudStateStoreContext(rootPath));
+            await using ICloudStateTransaction transaction = await store.BeginTransactionAsync();
+            Assert.Empty(await transaction.EchoSuppressions.ListActiveAsync(DateTimeOffset.UtcNow));
+        }
+        finally
+        {
+            DeleteRoot(rootPath);
+        }
+    }
+
+    [Fact]
     public async Task DurableConflictEnvelopeCanBeReadAndDeferred()
     {
         string rootPath = CreateRoot();

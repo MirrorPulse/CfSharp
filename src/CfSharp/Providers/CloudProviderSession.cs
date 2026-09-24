@@ -452,7 +452,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             : new string(callbackInfo->NormalizedPath);
         CfConnectionKey connectionKey = callbackInfo->ConnectionKey;
         CfTransferKey transferKey = callbackInfo->TransferKey;
-        CfRequestKey requestKey = callbackInfo->RequestKey;
+        CfRequestKey requestKey = ReadRequestKey(callbackInfo);
         long fileSize = callbackInfo->FileSize;
         CloudCorrelationVector? correlationVector = CopyCorrelationVector(callbackInfo);
         CloudFileFetchRequest request = new(
@@ -616,11 +616,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         PlaceholderRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             request,
             cancellation);
 
-        long requestKey = callbackInfo->RequestKey.Internal;
+        long requestKey = ReadRequestKey(callbackInfo).Internal;
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -919,10 +919,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         ValidationRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             request,
             cancellation);
-        long requestKey = callbackInfo->RequestKey.Internal;
+        long requestKey = ReadRequestKey(callbackInfo).Internal;
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -1006,7 +1006,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             CfOperationType.AckDehydrate,
             CloudProviderRequestKind.Dehydrate,
             request,
@@ -1142,7 +1142,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             CfOperationType.AckDelete,
             CloudProviderRequestKind.Delete,
             request,
@@ -1180,7 +1180,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         PolicyRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             CfOperationType.AckRename,
             CloudProviderRequestKind.Rename,
             request,
@@ -1253,6 +1253,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             : new ReadOnlySpan<byte>(callbackInfo->FileIdentity, length).ToArray();
     }
 
+    private static unsafe CfRequestKey ReadRequestKey(CfCallbackInfo* callbackInfo)
+    {
+        int offset = Marshal.OffsetOf<CfCallbackInfo>(nameof(CfCallbackInfo.RequestKey)).ToInt32();
+        uint requiredSize = checked((uint)(offset + sizeof(CfRequestKey)));
+        return callbackInfo->StructSize >= requiredSize
+            ? callbackInfo->RequestKey
+            : default;
+    }
+
     private static unsafe CloudCorrelationVector? CopyCorrelationVector(CfCallbackInfo* callbackInfo)
     {
         if (callbackInfo->CorrelationVector is null)
@@ -1277,7 +1286,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         NotificationRequest activeRequest = new(
             callbackInfo->ConnectionKey,
             callbackInfo->TransferKey,
-            callbackInfo->RequestKey,
+            ReadRequestKey(callbackInfo),
             notification,
             CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token),
             registryKey);
@@ -1902,7 +1911,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Type = operationType,
             ConnectionKey = callbackInfo->ConnectionKey,
             TransferKey = callbackInfo->TransferKey,
-            RequestKey = callbackInfo->RequestKey,
+            RequestKey = ReadRequestKey(callbackInfo),
         };
         CfOperationParameters parameters = default;
         switch (operationType)
@@ -1931,7 +1940,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             "CloudProviderSession.PolicyFailure",
             result,
             callbackInfo->ConnectionKey.Internal,
-            callbackInfo->RequestKey.Internal,
+            ReadRequestKey(callbackInfo).Internal,
             path);
     }
 
@@ -2008,13 +2017,13 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     private unsafe void CancelRequest(CfCallbackInfo* callbackInfo)
     {
-        if (_requests.TryGetValue(callbackInfo->RequestKey.Internal, out ActiveRequest? request))
+        if (_requests.TryGetValue(ReadRequestKey(callbackInfo).Internal, out ActiveRequest? request))
         {
             request.Cancel();
         }
 
         if (_callbackRequests.TryGetValue(
-            callbackInfo->RequestKey.Internal,
+            ReadRequestKey(callbackInfo).Internal,
             out CallbackRequest? callbackRequest))
         {
             callbackRequest.Cancel();

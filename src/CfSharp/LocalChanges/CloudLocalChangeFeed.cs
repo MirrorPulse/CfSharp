@@ -44,7 +44,7 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
     private Task? _processorTask;
     private LocalChangeSourceEvent? _pendingRename;
     private long _nextObservation;
-    private bool _rescanNoticeDelivered;
+    private int _rescanNoticeDelivered;
     private Exception? _failure;
     private int _overflowSignaled;
     private int _started;
@@ -137,9 +137,9 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
 
             LocalChangeCheckpoint checkpoint = await ReadCheckpointAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (checkpoint.RequiresFullRescan && !_rescanNoticeDelivered)
+            if (checkpoint.RequiresFullRescan &&
+                Interlocked.CompareExchange(ref _rescanNoticeDelivered, 1, 0) == 0)
             {
-                _rescanNoticeDelivered = true;
                 return new CloudLocalChangeBatch([], requiresFullRescan: true);
             }
 
@@ -249,7 +249,7 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
                 DateTimeOffset.UtcNow),
             cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        _rescanNoticeDelivered = false;
+        Volatile.Write(ref _rescanNoticeDelivered, 0);
     }
 
     /// <summary>
@@ -788,7 +788,7 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             .ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         _nextObservation = checkpoint.Observation;
-        _rescanNoticeDelivered = false;
+        Volatile.Write(ref _rescanNoticeDelivered, 0);
     }
 
     private async ValueTask<IReadOnlyList<CloudOperationJournalEntry>> ListOperationsAsync(

@@ -571,6 +571,36 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 cancellationToken).ConfigureAwait(false);
         }
 
+        public async ValueTask<IReadOnlyList<CloudOperationJournalEntry>> ListByItemIdAsync(
+            Guid itemId,
+            int maximumCount,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(maximumCount, 1);
+            return await _owner.ExecuteAsync(
+                async token =>
+                {
+                    await using SqliteCommand command = _owner.CreateCommand(
+                        SelectColumns +
+                        " WHERE item_id = $item_id ORDER BY sequence LIMIT $maximum_count;",
+                        token);
+                    command.Parameters.AddWithValue("$item_id", itemId.ToString("D"));
+                    command.Parameters.AddWithValue("$maximum_count", maximumCount);
+                    await using SqliteDataReader reader = await command
+                        .ExecuteReaderAsync(token)
+                        .ConfigureAwait(false);
+                    List<CloudOperationJournalEntry> operations = [];
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        operations.Add(ReadOperation(reader));
+                    }
+
+                    return (IReadOnlyList<CloudOperationJournalEntry>)operations;
+                },
+                "The SQLite item operation journal could not be listed.",
+                cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask UpdateAsync(
             CloudOperationJournalEntry operation,
             CancellationToken cancellationToken = default)

@@ -731,6 +731,7 @@ internal static class SqliteSchema
                 databasePath,
                 syncRootPath,
                 cancellationToken).ConfigureAwait(false);
+            await EnsureOperationItemIndexAsync(connection, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -858,6 +859,7 @@ internal static class SqliteSchema
             );
 
             CREATE INDEX IF NOT EXISTS ix_operations_sequence ON operations(sequence);
+            CREATE INDEX IF NOT EXISTS ix_operations_item_sequence ON operations(item_id, sequence);
             CREATE INDEX IF NOT EXISTS ix_conflicts_created ON conflicts(created_at_ticks, conflict_id);
             CREATE INDEX IF NOT EXISTS ix_echo_expiration ON echo_suppressions(expires_at_ticks);
 
@@ -888,6 +890,17 @@ internal static class SqliteSchema
             syncRootPath,
             addSyncRootColumn: !syncRootColumnExists,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureOperationItemIndexAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "CREATE INDEX IF NOT EXISTS ix_operations_item_sequence " +
+            "ON operations(item_id, sequence);";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task MigrateVersionTwoAsync(

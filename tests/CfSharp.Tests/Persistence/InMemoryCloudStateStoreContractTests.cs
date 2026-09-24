@@ -245,6 +245,21 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
             return ValueTask.FromResult(operations);
         }
 
+        public ValueTask<IReadOnlyList<CloudOperationJournalEntry>> ListByItemIdAsync(
+            Guid itemId,
+            int maximumCount,
+            CancellationToken cancellationToken = default)
+        {
+            CheckActive(cancellationToken);
+            ArgumentOutOfRangeException.ThrowIfLessThan(maximumCount, 1);
+            IReadOnlyList<CloudOperationJournalEntry> operations = _state.Operations.Values
+                .Where(operation => operation.ItemId == itemId)
+                .OrderBy(operation => operation.Sequence)
+                .Take(maximumCount)
+                .ToArray();
+            return ValueTask.FromResult(operations);
+        }
+
         public ValueTask UpdateAsync(
             CloudOperationJournalEntry operation,
             CancellationToken cancellationToken = default)

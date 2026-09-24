@@ -869,9 +869,11 @@ public sealed partial class CloudFileSystem
         CloudItemState? localState = byRemoteId ?? byItemId ?? byPreviousPath ?? byPath;
         IReadOnlyList<CloudOperationJournalEntry> operations = localState is null
             ? []
-            : (await transaction.Operations.ListAsync(4096, cancellationToken).ConfigureAwait(false))
-                .Where(operation => operation.ItemId == localState.ItemId)
-                .ToArray();
+            : await transaction.Operations.ListByItemIdAsync(
+                    localState.ItemId,
+                    maximumCount: int.MaxValue,
+                    cancellationToken)
+                .ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         return new RemoteEntryContext(
             localState,

@@ -185,6 +185,17 @@ public interface ICloudOperationJournal
         int maximumCount,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Lists the earliest operations belonging to one item in ascending sequence order.
+    /// </summary>
+    /// <param name="itemId">Item identity whose pending operations are returned.</param>
+    /// <param name="maximumCount">Positive upper bound for the returned page.</param>
+    /// <param name="cancellationToken">Token that cancels the query.</param>
+    ValueTask<IReadOnlyList<CloudOperationJournalEntry>> ListByItemIdAsync(
+        Guid itemId,
+        int maximumCount,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Replaces retry metadata and payload for an existing operation.</summary>
     ValueTask UpdateAsync(
         CloudOperationJournalEntry operation,

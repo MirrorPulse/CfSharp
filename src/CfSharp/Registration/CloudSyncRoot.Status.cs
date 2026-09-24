@@ -8,6 +8,11 @@ namespace CfSharp;
 
 public sealed partial class CloudSyncRoot
 {
+    private static readonly UnicodeEncoding StrictUnicode = new(
+        bigEndian: false,
+        byteOrderMark: false,
+        throwOnInvalidBytes: true);
+
     /// <summary>Reports rich provider status for this registered sync root.</summary>
     /// <param name="status">Managed status whose text and device bytes are copied for the call.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
@@ -90,7 +95,7 @@ public sealed partial class CloudSyncRoot
         }
     }
 
-    private static byte[] EncodeDescription(string description)
+    internal static byte[] EncodeDescription(string description)
     {
         if (description.Contains('\0'))
         {
@@ -99,7 +104,7 @@ public sealed partial class CloudSyncRoot
 
         try
         {
-            return Encoding.Unicode.GetBytes(description + '\0');
+            return StrictUnicode.GetBytes(description + '\0');
         }
         catch (ArgumentException exception)
         {

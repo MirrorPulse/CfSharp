@@ -125,6 +125,18 @@ public sealed class CloudPlaceholderModelTests
     }
 
     [Fact]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public void RichStatusEncodingRejectsUnpairedUtf16Surrogates()
+    {
+        Assert.Throws<ArgumentException>(() => CloudSyncRoot.EncodeDescription("bad\ud800"));
+
+        byte[] encoded = CloudSyncRoot.EncodeDescription("status");
+        Assert.Equal((byte)'s', encoded[0]);
+        Assert.Equal(0, encoded[^1]);
+        Assert.Equal(0, encoded[^2]);
+    }
+
+    [Fact]
     public void FileRangesValidateFiniteAndToEndForms()
     {
         CloudFileRange finite = new(10, 20);

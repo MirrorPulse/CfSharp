@@ -203,6 +203,17 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
                     "The SQLite database file cannot be a reparse point.");
             }
 
+            foreach (string sidecarPath in new[] { DatabasePath + "-wal", DatabasePath + "-shm" })
+            {
+                if ((File.Exists(sidecarPath) || Directory.Exists(sidecarPath)) &&
+                    (File.GetAttributes(sidecarPath) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw CreateException(
+                        SqliteCloudStateStoreError.InvalidPath,
+                        $"The SQLite sidecar '{sidecarPath}' cannot be a reparse point.");
+                }
+            }
+
             string lockPath = DatabasePath + ".cfsharp.lock";
             if (File.Exists(lockPath) || Directory.Exists(lockPath))
             {

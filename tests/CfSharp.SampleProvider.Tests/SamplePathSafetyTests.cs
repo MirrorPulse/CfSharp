@@ -8,6 +8,18 @@ namespace CfSharp.SampleProvider.Tests;
 public sealed class SamplePathSafetyTests
 {
     [Fact]
+    [SupportedOSPlatform("windows10.0.19041")]
+    public void ShellRegistrationIdIsStableAndScopedToTheCurrentUser()
+    {
+        string first = ShellSyncRootRegistrar.GetRegistrationId();
+        string second = ShellSyncRootRegistrar.GetRegistrationId();
+
+        Assert.Equal(first, second);
+        Assert.StartsWith("CfSharpSample!S-", first, StringComparison.Ordinal);
+        Assert.EndsWith("!Default", first, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ArgumentsRequireAnExplicitCommandAndStateDatabase()
     {
         Assert.False(SampleArguments.TryParse([], out _, out _));

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using System.Text;
 using CfSharp;
 using CfSharp.Storage.Sqlite;
@@ -28,11 +28,19 @@ internal static class SampleProvider
 
         SampleArguments selectedOptions = options!;
 
+        if (selectedOptions.Command is SampleCommand.Register or SampleCommand.Unregister &&
+            !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+        {
+            Console.Error.WriteLine(
+                "CfSharp Sample Shell registration requires Windows 10 version 2004 or later.");
+            return 1;
+        }
+
         try
         {
             return selectedOptions.Command switch
             {
-                SampleCommand.Register => Register(selectedOptions.SyncRootPath),
+                SampleCommand.Register => await RegisterAsync(selectedOptions.SyncRootPath),
                 SampleCommand.Unregister => Unregister(selectedOptions.SyncRootPath),
                 SampleCommand.Run => await RunProviderAsync(selectedOptions),
                 _ => throw new InvalidOperationException("The sample command is not supported."),
@@ -47,26 +55,47 @@ internal static class SampleProvider
         }
     }
 
-    [SupportedOSPlatform("windows10.0.16299")]
-    private static int Register(string requestedSyncRootPath)
+    [SupportedOSPlatform("windows10.0.19041")]
+    private static async Task<int> RegisterAsync(string requestedSyncRootPath)
     {
         string syncRootPath = Path.GetFullPath(requestedSyncRootPath);
         Directory.CreateDirectory(syncRootPath);
         syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
-        CloudSyncRoot syncRoot = CloudSyncRoot.Register(syncRootPath, CreateRegistration());
+        await ShellSyncRootRegistrar.RegisterAsync(syncRootPath);
+        CloudSyncRoot syncRoot;
+        try
+        {
+            syncRoot = CloudSyncRoot.Register(syncRootPath, CreateRegistration());
+        }
+        catch
+        {
+            try
+            {
+                ShellSyncRootRegistrar.Unregister();
+            }
+            catch
+            {
+                // Preserve the original CFAPI failure; the unregister command can remove
+                // the Shell registration if Windows rejected the compensating cleanup.
+            }
+
+            throw;
+        }
+
         CloudSyncRootInfo info = syncRoot.GetInfo();
         Console.WriteLine($"Registered CfSharp Sample at {info.Path}");
         Console.WriteLine($"Provider: {info.ProviderName} {info.ProviderVersion}");
         return 0;
     }
 
-    [SupportedOSPlatform("windows10.0.16299")]
+    [SupportedOSPlatform("windows10.0.19041")]
     private static int Unregister(string requestedSyncRootPath)
     {
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
             requestedSyncRootPath,
             "sync-root");
         CloudSyncRoot.Open(syncRootPath).Unregister();
+        ShellSyncRootRegistrar.Unregister();
         Console.WriteLine($"Unregistered CfSharp Sample from {syncRootPath}");
         return 0;
     }

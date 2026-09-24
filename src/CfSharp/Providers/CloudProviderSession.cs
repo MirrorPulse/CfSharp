@@ -2142,6 +2142,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             as CloudProviderSession;
     }
 
+    private static unsafe void RecordCallbackFailure(
+        string callbackType,
+        CfCallbackInfo* callbackInfo,
+        Exception exception)
+    {
+        long connectionKey = callbackInfo is null ? 0 : callbackInfo->ConnectionKey.Internal;
+        long transferKey = callbackInfo is null ? 0 : callbackInfo->TransferKey.Internal;
+        long requestKey = callbackInfo is null ? 0 : ReadRequestKey(callbackInfo).Internal;
+        string? path = callbackInfo is null || callbackInfo->NormalizedPath is null
+            ? null
+            : new string(callbackInfo->NormalizedPath);
+        CloudDiagnostics.RecordProviderFailure(
+            "CloudProviderSession.Callback." + callbackType,
+            exception,
+            connectionKey,
+            transferKey,
+            requestKey,
+            path);
+    }
+
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static unsafe void FetchDataCallback(
         CfCallbackInfo* callbackInfo,
@@ -2154,8 +2174,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchFetch(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("FetchData", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2173,8 +2194,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.CancelRequest(callbackInfo);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("CancelFetchData", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2191,8 +2213,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchFetchPlaceholders(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("FetchPlaceholders", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2210,8 +2233,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.CancelRequest(callbackInfo);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("CancelFetchPlaceholders", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2228,8 +2252,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchValidateData(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("ValidateData", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2261,8 +2286,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyFileOpenCompletion", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2294,8 +2320,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyFileCloseCompletion", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2312,8 +2339,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchDehydrate(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyDehydrate", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2345,8 +2373,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyDehydrateCompletion", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2363,8 +2392,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchDelete(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyDelete", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2396,8 +2426,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyDeleteCompletion", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2414,8 +2445,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 GetSession(callbackInfo)?.DispatchRename(callbackInfo, callbackParameters);
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyRename", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }
@@ -2449,8 +2481,9 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
             }
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            RecordCallbackFailure("NotifyRenameCompletion", callbackInfo, exception);
             // Exceptions must never cross the unmanaged callback boundary.
         }
     }

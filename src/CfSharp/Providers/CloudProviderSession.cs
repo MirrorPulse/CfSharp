@@ -2147,19 +2147,27 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         CfCallbackInfo* callbackInfo,
         Exception exception)
     {
-        long connectionKey = callbackInfo is null ? 0 : callbackInfo->ConnectionKey.Internal;
-        long transferKey = callbackInfo is null ? 0 : callbackInfo->TransferKey.Internal;
-        long requestKey = callbackInfo is null ? 0 : ReadRequestKey(callbackInfo).Internal;
-        string? path = callbackInfo is null || callbackInfo->NormalizedPath is null
-            ? null
-            : new string(callbackInfo->NormalizedPath);
-        CloudDiagnostics.RecordProviderFailure(
-            "CloudProviderSession.Callback." + callbackType,
-            exception,
-            connectionKey,
-            transferKey,
-            requestKey,
-            path);
+        try
+        {
+            long connectionKey = callbackInfo is null ? 0 : callbackInfo->ConnectionKey.Internal;
+            long transferKey = callbackInfo is null ? 0 : callbackInfo->TransferKey.Internal;
+            long requestKey = callbackInfo is null ? 0 : ReadRequestKey(callbackInfo).Internal;
+            string? path = callbackInfo is null || callbackInfo->NormalizedPath is null
+                ? null
+                : new string(callbackInfo->NormalizedPath);
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.Callback." + callbackType,
+                exception,
+                connectionKey,
+                transferKey,
+                requestKey,
+                path);
+        }
+        catch
+        {
+            // A malformed native callback must not turn diagnostics into a second unmanaged
+            // boundary failure. The original exception remains intentionally contained.
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]

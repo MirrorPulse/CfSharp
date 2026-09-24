@@ -810,15 +810,19 @@ public sealed partial class CloudFileSystem
 
         if (item is CloudDirectory directory)
         {
-            CloudRecursiveOperationResult result;
             try
             {
-                result = await directory.DeleteTreeAsync(
+                CloudRecursiveOperationResult result = await directory.DeleteTreeAsync(
                         new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
                         cancellationToken)
                     .ConfigureAwait(false);
+
+                if (!result.IsSuccessful)
+                {
+                    throw result.Entries.First(entry => entry.Error is not null).Error!;
+                }
             }
-            catch (OperationCanceledException)
+            catch
             {
                 if (suppressionId is Guid registeredSuppressionId)
                 {
@@ -826,11 +830,6 @@ public sealed partial class CloudFileSystem
                 }
 
                 throw;
-            }
-
-            if (!result.IsSuccessful)
-            {
-                throw result.Entries.First(entry => entry.Error is not null).Error!;
             }
         }
         else

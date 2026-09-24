@@ -706,6 +706,7 @@ internal static class SqliteSchema
                     connection,
                     syncRootPath,
                     addSyncRootColumn: false,
+                    schemaVersion: CurrentVersion,
                     cancellationToken)
                     .ConfigureAwait(false);
                 return;
@@ -787,6 +788,7 @@ internal static class SqliteSchema
         SqliteConnection connection,
         string syncRootPath,
         bool addSyncRootColumn,
+        int schemaVersion,
         CancellationToken cancellationToken)
     {
         await using SqliteTransaction transaction = (SqliteTransaction)await connection
@@ -884,7 +886,7 @@ internal static class SqliteSchema
                 sync_root_path = excluded.sync_root_path;
             """;
         command.Parameters.AddWithValue("$sync_root_path", syncRootPath);
-        command.Parameters.AddWithValue("$version", CurrentVersion);
+        command.Parameters.AddWithValue("$version", schemaVersion);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -903,6 +905,7 @@ internal static class SqliteSchema
             connection,
             syncRootPath,
             addSyncRootColumn: !syncRootColumnExists,
+            schemaVersion: 1,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -954,7 +957,7 @@ internal static class SqliteSchema
         updateVersion.Transaction = transaction;
         updateVersion.CommandText =
             "UPDATE cfsharp_schema SET version = $version WHERE singleton = 1;";
-        updateVersion.Parameters.AddWithValue("$version", CurrentVersion);
+        updateVersion.Parameters.AddWithValue("$version", 2);
         await updateVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -1002,7 +1005,7 @@ internal static class SqliteSchema
         updateVersion.Transaction = transaction;
         updateVersion.CommandText =
             "UPDATE cfsharp_schema SET version = $version WHERE singleton = 1;";
-        updateVersion.Parameters.AddWithValue("$version", CurrentVersion);
+        updateVersion.Parameters.AddWithValue("$version", 3);
         await updateVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

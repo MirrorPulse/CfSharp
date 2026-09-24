@@ -54,11 +54,6 @@ public sealed partial class CloudFileSystem
             cancellationToken).ConfigureAwait(false);
 
         LocalCloudItemInspection sourceState = CloudItemInspector.Inspect(item.FullPath, item.Kind);
-        if (!sourceState.Exists)
-        {
-            throw new FileNotFoundException("The cloud item does not exist.", item.FullPath);
-        }
-
         LocalCloudItemInspection destinationDirectoryState = CloudItemInspector.Inspect(
             destination.FullPath,
             CloudItemKind.Directory);
@@ -77,6 +72,53 @@ public sealed partial class CloudFileSystem
         {
             throw new InvalidOperationException(
                 "Durable state already identifies an unrelated item at the destination path.");
+        }
+
+        if (!sourceState.Exists)
+        {
+            LocalCloudItemInspection destinationState = CloudItemInspector.Inspect(
+                movedItem.FullPath,
+                item.Kind);
+            if (statePlan.SourceEntries.Count == 0 ||
+                !destinationState.Exists ||
+                !destinationState.PlaceholderState.HasFlag(CloudPlaceholderState.Placeholder))
+            {
+                throw new FileNotFoundException("The cloud item does not exist.", item.FullPath);
+            }
+
+            // A previous native move may have succeeded immediately before its durable-state
+            // transaction failed. The source durable entries and destination namespace together
+            // identify that retry state; complete only the missing durable rename and never issue
+            // a second native move.
+            try
+            {
+                await PersistMovedStateAsync(
+                    operation.StateStore,
+                    statePlan.SourceEntries,
+                    item.RelativePath,
+                    movedItem.RelativePath,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw new CloudItemCoordinationException(
+                    "CloudItem.Move",
+                    item.FullPath,
+                    movedItem.FullPath,
+                    operationUsn: null,
+                    exception);
+            }
+
+            CloudItemSnapshot retriedSnapshot = await InspectCoreAsync(
+                movedItem,
+                operation.StateStore,
+                CancellationToken.None).ConfigureAwait(false);
+            return new CloudItemMoveResult(
+                item.FullPath,
+                movedItem.FullPath,
+                movedItem,
+                retriedSnapshot,
+                statePlan.SourceEntries.Count);
         }
 
         if (string.Equals(item.FullPath, movedItem.FullPath, StringComparison.Ordinal))

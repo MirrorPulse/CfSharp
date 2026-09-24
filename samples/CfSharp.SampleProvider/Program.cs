@@ -25,15 +25,10 @@ internal static class SampleProvider
             return 2;
         }
 
-        string contentRoot = Path.GetFullPath(args[0]);
+        string contentRoot = SamplePathSafety.NormalizeExistingDirectory(args[0], "content");
         string syncRootPath = Path.GetFullPath(args[1]);
-        if (!Directory.Exists(contentRoot))
-        {
-            Console.Error.WriteLine($"Content directory does not exist: {contentRoot}");
-            return 2;
-        }
-
         Directory.CreateDirectory(syncRootPath);
+        syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
         SyncRootRegistrationOptions registration =
             SyncRootRegistrationOptions.CreateBuilder("CfSharp Sample Provider", "0.1.0")
                 .WithProviderId(ProviderId)
@@ -52,24 +47,40 @@ internal static class SampleProvider
         // itself; an external consumer reliably exercises the same shell-facing path.
         using (Process enumerationProcess = Process.Start(new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = $"/d /c dir /s /b \"{syncRootPath}\" > nul",
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         })!)
         {
+            enumerationProcess.StartInfo.ArgumentList.Add("/d");
+            enumerationProcess.StartInfo.ArgumentList.Add("/c");
+            enumerationProcess.StartInfo.ArgumentList.Add("dir");
+            enumerationProcess.StartInfo.ArgumentList.Add("/s");
+            enumerationProcess.StartInfo.ArgumentList.Add("/b");
+            enumerationProcess.StartInfo.ArgumentList.Add("/a:-l");
+            enumerationProcess.StartInfo.ArgumentList.Add(syncRootPath);
             await enumerationProcess.WaitForExitAsync();
             if (enumerationProcess.ExitCode != 0)
             {
+                string error = await enumerationProcess.StandardError.ReadToEndAsync();
                 throw new InvalidOperationException(
-                    $"The external sync-root enumeration failed with exit code {enumerationProcess.ExitCode}.");
+                    $"The external sync-root enumeration failed with exit code {enumerationProcess.ExitCode}: {error}");
             }
         }
 
         // Descendant enumeration repeats this for every partial directory and exercises the
         // continuation-token path without requiring the sample to pre-materialize the tree.
         string[] placeholderFiles = Directory
-            .EnumerateFiles(syncRootPath, "*", SearchOption.AllDirectories)
+            .EnumerateFiles(
+                syncRootPath,
+                "*",
+                new EnumerationOptions
+                {
+                    RecurseSubdirectories = true,
+                    AttributesToSkip = FileAttributes.ReparsePoint,
+                })
             .ToArray();
         List<Task<byte[]>> randomReads = [];
         foreach (string placeholderFile in placeholderFiles.Take(4))
@@ -108,14 +119,12 @@ internal static class SampleProvider
     private sealed class LocalFolderContentProvider : ICloudDemandProvider
     {
         private readonly string _rootPath;
-        private readonly string _rootPrefix;
         private readonly string _syncRootPath;
 
         internal LocalFolderContentProvider(string rootPath, string syncRootPath)
         {
-            _rootPath = Path.GetFullPath(rootPath);
-            _rootPrefix = _rootPath + Path.DirectorySeparatorChar;
-            _syncRootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(syncRootPath));
+            _rootPath = SamplePathSafety.NormalizeExistingDirectory(rootPath, "content");
+            _syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
         }
 
         public ValueTask<Stream> OpenReadAsync(
@@ -126,12 +135,7 @@ internal static class SampleProvider
             string remotePath = CloudPlaceholderIdentity
                 .Decode(request.FileIdentity)
                 .RemoteId;
-            string relativePath = Path.GetRelativePath(_rootPath, remotePath);
-            string contentPath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
-            if (!contentPath.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("The placeholder identity escapes the content directory.");
-            }
+            string contentPath = SamplePathSafety.ResolveContainedPath(_rootPath, remotePath);
 
             Stream stream = new FileStream(
                 contentPath,
@@ -154,6 +158,11 @@ internal static class SampleProvider
                 : request.SearchPattern;
             string[] entries = Directory
                 .EnumerateFileSystemEntries(sourceDirectory, pattern, SearchOption.TopDirectoryOnly)
+                .Where(static path =>
+                {
+                    SamplePathSafety.RejectReparsePoints(path);
+                    return true;
+                })
                 .OrderBy(static path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
                 .ThenBy(static path => Path.GetFileName(path), StringComparer.Ordinal)
                 .ToArray();
@@ -184,11 +193,13 @@ internal static class SampleProvider
             }
 
             relativePath = relativePath.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string sourcePath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
-            if (!sourcePath.Equals(_rootPath, StringComparison.OrdinalIgnoreCase) &&
-                !sourcePath.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase))
+            string sourcePath = SamplePathSafety.ResolveContainedPath(
+                _rootPath,
+                Path.Combine(_rootPath, relativePath));
+            if (!Directory.Exists(sourcePath))
             {
-                throw new InvalidDataException("The directory callback escapes the content directory.");
+                throw new DirectoryNotFoundException(
+                    $"The content directory does not exist: {sourcePath}");
             }
 
             return sourcePath;
@@ -211,6 +222,7 @@ internal static class SampleProvider
 
         private static CloudPlaceholderSpec CreatePlaceholder(string path)
         {
+            SamplePathSafety.RejectReparsePoints(path);
             string name = Path.GetFileName(path);
             string remoteId = path;
             CloudPlaceholderIdentity identity = new(CreateStableItemId(remoteId), remoteId);

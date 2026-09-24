@@ -172,62 +172,86 @@ internal static class SampleProvider
         // Use a separate process for the first enumeration. Windows does not always issue a
         // FETCH_PLACEHOLDERS callback for an enumeration initiated by the provider process
         // itself; an external consumer reliably exercises the same shell-facing path.
-        using (Process enumerationProcess = Process.Start(new ProcessStartInfo
+        ProcessStartInfo enumerationStartInfo = CreateEnumerationProcessStartInfo(
+            syncRootPath);
+        using (Process enumerationProcess = Process.Start(enumerationStartInfo)!)
+        {
+            Task<string> outputTask = enumerationProcess.StandardOutput.ReadToEndAsync(
+                CancellationToken.None);
+            Task<string> errorTask = enumerationProcess.StandardError.ReadToEndAsync(
+                CancellationToken.None);
+            await enumerationProcess.WaitForExitAsync(cancellationToken);
+            string output = await outputTask;
+            string error = await errorTask;
+            if (enumerationProcess.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"The external sync-root enumeration failed with exit code " +
+                    $"{enumerationProcess.ExitCode}: {error}");
+            }
+
+            string[] placeholderFiles = output
+                .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+                .Select(path => SamplePathSafety.ResolveSyncRootCallbackPath(syncRootPath, path))
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (placeholderFiles.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "The external sync-root enumeration returned no files; the sample self-check " +
+                    "cannot report a successful hydration run for an empty result.");
+            }
+
+            // Descendant enumeration repeats this for every partial directory and exercises the
+            // continuation-token path without requiring the sample to pre-materialize the tree.
+            List<Task<byte[]>> randomReads = [];
+            foreach (string placeholderFile in placeholderFiles.Take(4))
+            {
+                string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
+                FileInfo sourceInfo = new(SamplePathSafety.ResolveContainedPath(
+                    contentRoot,
+                    Path.Combine(contentRoot, relativePath)));
+                if (sourceInfo.Length == 0)
+                {
+                    continue;
+                }
+
+                long offset = sourceInfo.Length / 2;
+                int length = (int)Math.Min(1024, sourceInfo.Length - offset);
+                randomReads.Add(ReadRangeAsync(placeholderFile, offset, length, cancellationToken));
+            }
+
+            if (randomReads.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "The external sync-root enumeration returned no non-empty files for the " +
+                    "concurrent hydration self-check.");
+            }
+
+            byte[][] ranges = await Task.WhenAll(randomReads);
+            Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
+            Console.WriteLine($"Concurrent random ranges hydrated: {ranges.Length}");
+        }
+    }
+
+    internal static ProcessStartInfo CreateEnumerationProcessStartInfo(string syncRootPath)
+    {
+        ProcessStartInfo startInfo = new()
         {
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-        })!)
-        {
-            enumerationProcess.StartInfo.ArgumentList.Add("/d");
-            enumerationProcess.StartInfo.ArgumentList.Add("/c");
-            enumerationProcess.StartInfo.ArgumentList.Add("dir");
-            enumerationProcess.StartInfo.ArgumentList.Add("/s");
-            enumerationProcess.StartInfo.ArgumentList.Add("/b");
-            enumerationProcess.StartInfo.ArgumentList.Add("/a:-l");
-            enumerationProcess.StartInfo.ArgumentList.Add(syncRootPath);
-            Task<string> outputTask = enumerationProcess.StandardOutput.ReadToEndAsync(
-                CancellationToken.None);
-            await enumerationProcess.WaitForExitAsync(cancellationToken);
-            _ = await outputTask;
-            if (enumerationProcess.ExitCode != 0)
-            {
-                string error = await enumerationProcess.StandardError.ReadToEndAsync(
-                    CancellationToken.None);
-                throw new InvalidOperationException(
-                    $"The external sync-root enumeration failed with exit code {enumerationProcess.ExitCode}: {error}");
-            }
-        }
-
-        // Descendant enumeration repeats this for every partial directory and exercises the
-        // continuation-token path without requiring the sample to pre-materialize the tree.
-        string[] placeholderFiles = Directory
-            .EnumerateFiles(
-                syncRootPath,
-                "*",
-                new EnumerationOptions
-                {
-                    RecurseSubdirectories = true,
-                    AttributesToSkip = FileAttributes.ReparsePoint,
-                })
-            .ToArray();
-        List<Task<byte[]>> randomReads = [];
-        foreach (string placeholderFile in placeholderFiles.Take(4))
-        {
-            string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
-            FileInfo sourceInfo = new(SamplePathSafety.ResolveContainedPath(
-                contentRoot,
-                Path.Combine(contentRoot, relativePath)));
-            long offset = sourceInfo.Length == 0 ? 0 : sourceInfo.Length / 2;
-            int length = (int)Math.Min(1024, sourceInfo.Length - offset);
-            randomReads.Add(ReadRangeAsync(placeholderFile, offset, length, cancellationToken));
-        }
-
-        byte[][] ranges = await Task.WhenAll(randomReads);
-        Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
-        Console.WriteLine($"Concurrent random ranges hydrated: {ranges.Length}");
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("dir");
+        startInfo.ArgumentList.Add("/s");
+        startInfo.ArgumentList.Add("/b");
+        startInfo.ArgumentList.Add(syncRootPath);
+        return startInfo;
     }
 
     private static async Task<byte[]> ReadRangeAsync(

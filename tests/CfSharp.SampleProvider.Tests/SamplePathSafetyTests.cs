@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 
 using Xunit.Sdk;
@@ -62,6 +63,27 @@ public sealed class SamplePathSafetyTests
                 out SampleArguments? unregister,
                 out _));
         Assert.Equal(SampleCommand.Unregister, unregister!.Command);
+    }
+
+    [Fact]
+    public void EnumerationProcessArgumentsAreBuiltBeforeTheProcessStarts()
+    {
+        ProcessStartInfo startInfo = global::SampleProvider.CreateEnumerationProcessStartInfo(
+            @"C:\CfSharpAcceptance\sync-root");
+
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Equal(
+            [
+                "/d",
+                "/c",
+                "dir",
+                "/s",
+                "/b",
+                @"C:\CfSharpAcceptance\sync-root",
+            ],
+            startInfo.ArgumentList);
     }
 
     [Fact]

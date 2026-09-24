@@ -212,15 +212,47 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         int disconnectResult = CfApi.CfDisconnectSyncRoot(_connectionKey);
         if (dispatcher is not null && !dispatcher.DisposeCompletion.IsCompleted)
         {
-            _ = CompleteNativeDisposeAfterDispatcherAsync(dispatcher);
+            _ = CompleteNativeDisposeAfterDispatcherAsync(dispatcher, disconnectResult);
             if (dispatcherFailure is not null)
             {
                 throw dispatcherFailure;
             }
 
+            if (disconnectResult < 0)
+            {
+                CloudDiagnostics.RecordNativeFailure(
+                    "CloudProviderSession.Disconnect",
+                    disconnectResult,
+                    _connectionKey.Internal,
+                    0,
+                    _syncRootPath);
+                throw CloudFilesException.FromHResult(
+                    "CloudProviderSession.Disconnect",
+                    _syncRootPath,
+                    disconnectResult);
+            }
+
             throw new TimeoutException(
                 "Cloud provider handlers are still draining; callback state and the state store " +
                 "must remain owned until they finish.");
+        }
+
+        if (disconnectResult < 0)
+        {
+            // The native connection may still dispatch callbacks after a failed disconnect.
+            // Retaining the callback table is safer than freeing it and creating a UAF window;
+            // reset the disposal claim so a caller can retry after the native failure clears.
+            CloudDiagnostics.RecordNativeFailure(
+                "CloudProviderSession.Disconnect",
+                disconnectResult,
+                _connectionKey.Internal,
+                0,
+                _syncRootPath);
+            Interlocked.Exchange(ref _disposed, 0);
+            throw CloudFilesException.FromHResult(
+                "CloudProviderSession.Disconnect",
+                _syncRootPath,
+                disconnectResult);
         }
 
         FinalizeNativeDispose();
@@ -235,15 +267,35 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
     internal Task DisposeCompletion => _disposeCompletion.Task;
 
-    private async Task CompleteNativeDisposeAfterDispatcherAsync(CloudProviderDispatcher dispatcher)
+    private async Task CompleteNativeDisposeAfterDispatcherAsync(
+        CloudProviderDispatcher dispatcher,
+        int initialDisconnectResult)
     {
         try
         {
             await dispatcher.DisposeCompletion.ConfigureAwait(false);
-        }
-        finally
-        {
+            int disconnectResult = initialDisconnectResult < 0
+                ? CfApi.CfDisconnectSyncRoot(_connectionKey)
+                : initialDisconnectResult;
+            if (disconnectResult < 0)
+            {
+                CloudDiagnostics.RecordNativeFailure(
+                    "CloudProviderSession.Disconnect",
+                    disconnectResult,
+                    _connectionKey.Internal,
+                    0,
+                    _syncRootPath);
+                Interlocked.Exchange(ref _disposed, 0);
+                return;
+            }
+
             FinalizeNativeDispose();
+        }
+        catch
+        {
+            // Keep callback memory and context owned if the deferred disconnect attempt itself
+            // fails unexpectedly. The next explicit DisposeAsync call can retry the boundary.
+            Interlocked.Exchange(ref _disposed, 0);
         }
     }
 

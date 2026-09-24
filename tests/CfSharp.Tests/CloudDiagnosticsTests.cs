@@ -39,4 +39,35 @@ public sealed class CloudDiagnosticsTests
         Assert.Equal("CfSharp", CloudDiagnostics.MeterName);
         Assert.DoesNotContain("path", CloudDiagnostics.ActivitySourceName, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void ProviderFailureDiagnosticsCaptureOpaqueKeysAndErrorDetails()
+    {
+        List<Activity> stopped = [];
+        using ActivityListener listener = new()
+        {
+            ShouldListenTo = source => source.Name == CloudDiagnostics.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllData,
+            ActivityStopped = stopped.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        CloudDiagnostics.RecordProviderFailure(
+            "CloudProviderSession.FetchData",
+            new IOException("injected"),
+            connectionKey: 1,
+            transferKey: 2,
+            requestKey: 3,
+            path: @"\nested\file.txt");
+
+        Activity activity = Assert.Single(stopped);
+        Assert.Equal("CloudProviderSession.FetchData", activity.GetTagItem("cfsharp.operation"));
+        Assert.Equal(1L, activity.GetTagItem("cfsharp.provider.connection_key"));
+        Assert.Equal(2L, activity.GetTagItem("cfsharp.provider.transfer_key"));
+        Assert.Equal(3L, activity.GetTagItem("cfsharp.provider.request_key"));
+        Assert.Equal("IOException", activity.GetTagItem("cfsharp.error.type"));
+        Assert.Equal(new IOException().HResult, activity.GetTagItem("cfsharp.error.hresult"));
+        Assert.NotEqual(@"\nested\file.txt", activity.GetTagItem("cfsharp.provider.path_fingerprint"));
+    }
 }

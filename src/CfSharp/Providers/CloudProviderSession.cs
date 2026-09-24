@@ -601,12 +601,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 ArrayPool<byte>.Shared.Return(buffer);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.FetchData",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             SendFailure(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.FetchData",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             SendFailure(activeRequest, NtStatus.CloudFileUnsuccessful);
         }
         finally
@@ -733,8 +747,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 _directoryContinuations[request.NormalizedPath] = page.ContinuationToken;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.FetchPlaceholders",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             // A canceled population request did not publish a page. Drop its in-memory token so
             // a later request restarts from the durable checkpoint (if one exists) instead of
             // retaining an abandoned continuation indefinitely.
@@ -743,8 +764,15 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 activeRequest.Request.NormalizedPath);
             SendPlaceholderFailure(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.FetchPlaceholders",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             SendPlaceholderFailure(activeRequest, NtStatus.CloudFileUnsuccessful);
         }
         finally
@@ -1005,12 +1033,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 : NtStatus.CloudFileUnsuccessful;
             SendAckData(activeRequest, status);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.ValidateData",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             SendAckData(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.ValidateData",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                activeRequest.Request.NormalizedPath);
             SendAckData(activeRequest, NtStatus.CloudFileUnsuccessful);
         }
         finally
@@ -1269,12 +1311,26 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                     ? NtStatus.Success
                     : NtStatus.CloudFileUnsuccessful);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.Policy",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                GetPolicyPath(activeRequest.Request));
             SendPolicyResult(activeRequest, NtStatus.CloudFileRequestCanceled);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            CloudDiagnostics.RecordProviderFailure(
+                "CloudProviderSession.Policy",
+                exception,
+                activeRequest.ConnectionKey.Internal,
+                activeRequest.TransferKey.Internal,
+                activeRequest.RequestKey.Internal,
+                GetPolicyPath(activeRequest.Request));
             SendPolicyResult(activeRequest, NtStatus.CloudFileUnsuccessful);
         }
         finally

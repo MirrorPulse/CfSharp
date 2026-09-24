@@ -179,6 +179,57 @@ public static class CloudDiagnostics
         }
     }
 
+    internal static void RecordProviderFailure(
+        string operation,
+        Exception exception,
+        long connectionKey,
+        long transferKey,
+        long requestKey,
+        string? path)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        Activity? activity = null;
+        bool ownsActivity = false;
+        try
+        {
+            activity = Activity.Current;
+            if (activity is null)
+            {
+                activity = ActivitySource.StartActivity(
+                    "cfsharp.provider.failure",
+                    ActivityKind.Internal);
+                ownsActivity = activity is not null;
+            }
+
+            if (activity is null)
+            {
+                return;
+            }
+
+            activity.SetTag("cfsharp.operation", operation);
+            activity.SetTag("cfsharp.provider.connection_key", connectionKey);
+            activity.SetTag("cfsharp.provider.transfer_key", transferKey);
+            activity.SetTag("cfsharp.provider.request_key", requestKey);
+            RecordException(activity, exception);
+            if (!string.IsNullOrEmpty(path))
+            {
+                activity.SetTag("cfsharp.provider.path_fingerprint", FingerprintPath(path));
+            }
+        }
+        catch
+        {
+            // Diagnostic listeners must never alter the provider completion result.
+        }
+        finally
+        {
+            if (ownsActivity)
+            {
+                StopActivity(activity, "failed");
+            }
+        }
+    }
+
     private static string FingerprintPath(string path) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path)))[..16];
 

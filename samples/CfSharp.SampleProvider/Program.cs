@@ -50,7 +50,6 @@ internal static class SampleProvider
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
             RedirectStandardError = true,
         })!)
         {

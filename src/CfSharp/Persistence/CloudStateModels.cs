@@ -109,7 +109,7 @@ public sealed class CloudItemState
 
         ItemId = itemId;
         RemoteId = CloudStateModelValidation.RequireText(remoteId, nameof(remoteId));
-        RelativePath = CloudStateModelValidation.RequireNonNull(relativePath, nameof(relativePath));
+        RelativePath = CloudRemotePathValidation.Canonicalize(relativePath, nameof(relativePath));
         Kind = CloudStateModelValidation.RequireDefined(kind, nameof(kind));
         RemoteRevision = remoteRevision;
         LocalFileId = localFileId;
@@ -385,10 +385,10 @@ public sealed class CloudEchoSuppressionState
         SuppressionId = suppressionId;
         ItemId = itemId;
         Kind = CloudStateModelValidation.RequireDefined(kind, nameof(kind));
-        RelativePath = CloudStateModelValidation.RequireNonNull(relativePath, nameof(relativePath));
+        RelativePath = CloudRemotePathValidation.Canonicalize(relativePath, nameof(relativePath));
         PreviousRelativePath = previousRelativePath is null
             ? null
-            : CloudStateModelValidation.RequireText(previousRelativePath, nameof(previousRelativePath));
+            : CloudRemotePathValidation.Canonicalize(previousRelativePath, nameof(previousRelativePath));
         _payload = payload.ToArray();
         ExpiresAt = expiresAt.ToUniversalTime();
         RemainingObservations = remainingObservations;

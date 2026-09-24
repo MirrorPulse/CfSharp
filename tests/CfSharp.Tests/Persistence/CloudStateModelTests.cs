@@ -95,6 +95,22 @@ public sealed class CloudStateModelTests
             [],
             DateTimeOffset.UtcNow,
             remainingObservations: 0));
+        Assert.Throws<ArgumentException>(() => new CloudItemState(
+            Guid.NewGuid(),
+            "remote",
+            "..\\outside.txt",
+            CloudItemKind.File,
+            null,
+            null,
+            false,
+            DateTimeOffset.UtcNow));
+        Assert.Throws<ArgumentException>(() => new CloudEchoSuppressionState(
+            Guid.NewGuid(),
+            null,
+            CloudStateOperationKind.Create,
+            "C:\\outside.txt",
+            [],
+            DateTimeOffset.UtcNow));
     }
 
     [Fact]

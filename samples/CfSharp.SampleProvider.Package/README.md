@@ -2,19 +2,18 @@
 
 This Windows Application Packaging Project is the phase 10 Desktop Bridge host for
 `CfSharp Sample`. Open `CfSharp.SampleProvider.Package.wapproj` in Visual Studio on
-Windows with the Windows Application Packaging workload installed, select `x64`,
-and build the package project.
+Windows with the Windows Application Packaging workload installed, select `x64`
+or `ARM64`, and build the package project.
 
 The package is intentionally unsigned in source control. Before distributing a
-preview or stable package, configure the CI signing identity and publisher subject
-through protected secrets. The manifest uses `CN=MirrorPulse Team` as the source
-publisher placeholder and must be replaced with the identity that owns the release
-certificate.
+preview or stable package, configure the CI signing identity through protected
+secrets. The manifest publisher and the signing certificate subject must both be
+`CN=MirrorPulse Team`; release automation must reject any mismatch.
 
-`Assets/Logo.svg` is the editable source artwork; the checked-in `Logo.png` and
-`Logo44.png` are the initial package assets. The packaging pipeline must validate
-the scale-qualified asset set accepted by the selected Visual Studio/MSIX toolchain
-before publishing.
+`Assets/Logo.svg` is the editable source artwork; the checked-in `Logo.png`,
+`Logo44.png`, and `Logo50.png` are the initial package assets. The packaging
+pipeline must validate the scale-qualified asset set accepted by the selected
+Visual Studio/MSIX toolchain before publishing.
 
 The package project is kept outside `CfSharp.sln` because the regular .NET CI build
 does not install the Visual Studio Appx targets. Package validation belongs in a

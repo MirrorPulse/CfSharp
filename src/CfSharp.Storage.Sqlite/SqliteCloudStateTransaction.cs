@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
@@ -51,7 +52,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         catch (Exception exception)
         {
             await RollBackAfterFailureAsync().ConfigureAwait(false);
-            await CompleteAsync().ConfigureAwait(false);
+            _ = await CompleteAsync().ConfigureAwait(false);
             if (exception is OperationCanceledException)
             {
                 throw;
@@ -63,31 +64,49 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 exception);
         }
 
-        await CompleteAsync().ConfigureAwait(false);
+        Exception? cleanupFailure = await CompleteAsync().ConfigureAwait(false);
+        if (cleanupFailure is not null)
+        {
+            Trace.TraceError(
+                "CfSharp SQLite transaction committed, but cleanup failed: {0}",
+                cleanupFailure);
+        }
     }
 
     public async ValueTask RollbackAsync(CancellationToken cancellationToken = default)
     {
         CheckActive(cancellationToken);
+
+        Exception? rollbackFailure = null;
         try
         {
             await _transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            await CompleteAsync().ConfigureAwait(false);
-            if (exception is OperationCanceledException)
-            {
-                throw;
-            }
+            rollbackFailure = exception;
+        }
 
+        Exception? cleanupFailure = await CompleteAsync().ConfigureAwait(false);
+        if (cleanupFailure is not null)
+        {
+            rollbackFailure = rollbackFailure is null
+                ? cleanupFailure
+                : new AggregateException(rollbackFailure, cleanupFailure);
+        }
+
+        if (rollbackFailure is OperationCanceledException)
+        {
+            throw rollbackFailure;
+        }
+
+        if (rollbackFailure is not null)
+        {
             throw SqliteSchema.TranslateFailure(
                 _databasePath,
                 "The SQLite state transaction could not be rolled back.",
-                exception);
+                rollbackFailure);
         }
-
-        await CompleteAsync().ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
@@ -107,7 +126,14 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
             rollbackFailure = exception;
         }
 
-        await CompleteAsync().ConfigureAwait(false);
+        Exception? cleanupFailure = await CompleteAsync().ConfigureAwait(false);
+        if (cleanupFailure is not null)
+        {
+            rollbackFailure = rollbackFailure is null
+                ? cleanupFailure
+                : new AggregateException(rollbackFailure, cleanupFailure);
+        }
+
         if (rollbackFailure is not null)
         {
             throw SqliteSchema.TranslateFailure(
@@ -172,22 +198,40 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         }
     }
 
-    private async ValueTask CompleteAsync()
+    private async ValueTask<Exception?> CompleteAsync()
     {
         if (Interlocked.Exchange(ref _terminal, 1) != 0)
         {
-            return;
+            return null;
         }
 
+        List<Exception>? failures = null;
         try
         {
-            await _transaction.DisposeAsync().ConfigureAwait(false);
-            await _connection.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await _transaction.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+
+            try
+            {
+                await _connection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
         }
         finally
         {
             _completed();
         }
+
+        return failures is null ? null : new AggregateException(failures);
     }
 
     private sealed class ItemRepository : ICloudItemStateRepository

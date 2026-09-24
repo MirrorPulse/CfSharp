@@ -324,7 +324,7 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
         {
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            Cache = SqliteCacheMode.Private,
             Pooling = true,
             ForeignKeys = true,
             DefaultTimeout = checked((int)Math.Ceiling(BusyTimeout.TotalSeconds)),
@@ -366,6 +366,7 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
     private readonly string _databasePath;
     private readonly FileStream _ownerLock;
     private readonly SqlitePathHandleLease _databaseLease;
+    private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private int _activeTransactions;
     private bool _disposed;
 
@@ -387,9 +388,17 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await _transactionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool transactionGateOwned = true;
         lock (_lifecycleGate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_disposed)
+            {
+                _transactionGate.Release();
+                transactionGateOwned = false;
+                ObjectDisposedException.ThrowIf(true, this);
+            }
+
             _activeTransactions++;
         }
 
@@ -418,7 +427,10 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
                 await connection.DisposeAsync().ConfigureAwait(false);
             }
 
-            OnTransactionCompleted();
+            if (transactionGateOwned)
+            {
+                OnTransactionCompleted();
+            }
             if (exception is OperationCanceledException or SqliteCloudStateStoreException)
             {
                 throw;
@@ -463,6 +475,8 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
         {
             _activeTransactions--;
         }
+
+        _transactionGate.Release();
     }
 }
 

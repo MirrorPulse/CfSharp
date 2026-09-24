@@ -55,7 +55,16 @@ public sealed partial class CloudFileSystem
                 item.FullPath,
                 flags,
                 "CloudItem.AcquireLease.Open");
-            return new CloudItemLease(item, options, operation, providerSession, protectedHandle);
+            long? logicalLength = item.Kind == CloudItemKind.File
+                ? CloudItemLease.ReadLogicalLength(protectedHandle)
+                : null;
+            return new CloudItemLease(
+                item,
+                options,
+                operation,
+                providerSession,
+                protectedHandle,
+                logicalLength);
         }
         catch
         {

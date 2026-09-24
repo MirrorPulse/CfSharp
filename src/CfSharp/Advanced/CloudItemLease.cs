@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using CfSharp.Native;
@@ -14,6 +15,7 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
     private readonly SafeCloudFilesProtectedHandle _protectedHandle;
     private readonly object _gate = new();
     private readonly CloudItemLeaseOptions _options;
+    private readonly long? _logicalLength;
     private readonly Activity? _activity;
     private CloudTransfer? _transfer;
     private int _disposed;
@@ -23,13 +25,15 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
         CloudItemLeaseOptions options,
         CloudFileSystem.CloudFileSystemOperationLease operation,
         CloudProviderSession providerSession,
-        SafeCloudFilesProtectedHandle protectedHandle)
+        SafeCloudFilesProtectedHandle protectedHandle,
+        long? logicalLength)
     {
         Item = item;
         _options = options;
         _operation = operation;
         _providerSession = providerSession;
         _protectedHandle = protectedHandle;
+        _logicalLength = logicalLength;
         _activity = CloudDiagnostics.StartActivity("cfsharp.item.lease", "lease");
         CloudDiagnostics.RecordLeaseLifetime(created: true);
     }
@@ -39,6 +43,15 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
 
     /// <summary>Gets the validated access options used to open the lease.</summary>
     public CloudItemLeaseOptions Options => _options;
+
+    /// <summary>
+    /// Gets the logical file length captured when the protected lease was opened, when available.
+    /// </summary>
+    /// <remarks>
+    /// The value is a lease-time snapshot. Windows remains authoritative if the protected handle
+    /// is invalidated or the file changes after the lease is opened.
+    /// </remarks>
+    internal long? LogicalLength => _logicalLength;
 
     /// <summary>Gets whether Windows has closed or invalidated the protected handle.</summary>
     public bool IsInvalidated => _protectedHandle.IsClosed || _protectedHandle.IsInvalid;
@@ -190,5 +203,43 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
         {
             throw CloudFilesException.FromHResult(operation, path, hresult);
         }
+    }
+
+    internal static long? ReadLogicalLength(
+        SafeCloudFilesProtectedHandle protectedHandle)
+    {
+        using SafeCloudFilesProtectedHandle.CloudFilesHandleReference handle =
+            protectedHandle.AcquireReference();
+        FileStandardInfo info = default;
+        if (!GetFileInformationByHandleEx(
+                handle.Win32Handle,
+                FileStandardInformation,
+                ref info,
+                Marshal.SizeOf<FileStandardInfo>()))
+        {
+            return null;
+        }
+
+        return info.IsDirectory != 0 || info.EndOfFile < 0 ? null : info.EndOfFile;
+    }
+
+    private const int FileStandardInformation = 1;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        nint fileHandle,
+        int fileInformationClass,
+        ref FileStandardInfo fileInformation,
+        int bufferSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileStandardInfo
+    {
+        internal long AllocationSize;
+        internal long EndOfFile;
+        internal uint NumberOfLinks;
+        internal byte DeletePending;
+        internal byte IsDirectory;
     }
 }

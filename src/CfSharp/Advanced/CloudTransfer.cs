@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Security;
 
 using CfSharp.Native;
 
@@ -545,33 +544,19 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
             throw new ArgumentException("Transfer offsets must be aligned to 4 KiB.", nameof(offset));
         }
 
-        long logicalLength = 0;
-        try
+        if (_lease.LogicalLength is long logicalLength)
         {
-            logicalLength = new FileInfo(_lease.Item.FullPath).Length;
+            bool reachesEndOfFile = logicalLength > 0 && end >= logicalLength;
+            if (length % Alignment != 0 && !reachesEndOfFile)
+            {
+                throw new ArgumentException(
+                    "Transfer lengths must be aligned to 4 KiB unless the range reaches the logical end of file.",
+                    nameof(length));
+            }
         }
-        catch (Exception exception) when (
-            exception is FileNotFoundException or DirectoryNotFoundException)
-        {
-            // The native call below reports the authoritative lifetime failure.
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or SecurityException)
-        {
-            throw new CloudTransferValidationException(
-                "CloudTransfer.RangeValidation",
-                _lease.Item.FullPath,
-                "The item length could not be read before validating the transfer range.",
-                exception);
-        }
-
-        bool reachesEndOfFile = logicalLength > 0 && end >= logicalLength;
-        if (length % Alignment != 0 && !reachesEndOfFile)
-        {
-            throw new ArgumentException(
-                "Transfer lengths must be aligned to 4 KiB unless the range reaches the logical end of file.",
-                nameof(length));
-        }
+        // A protected handle can be invalidated or have an unavailable metadata query. In that
+        // case do not substitute a racy path-based length; Windows remains authoritative for the
+        // range and returns the corresponding native error.
 
         return end;
     }

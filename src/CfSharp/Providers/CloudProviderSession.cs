@@ -1643,7 +1643,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 if (result < 0)
                 {
                     request.ReleaseTerminalClaim();
-                    CloudDiagnostics.RecordNativeFailure("CloudProviderSession.TransferPlaceholders");
+                    CloudDiagnostics.RecordNativeFailure(
+                        "CloudProviderSession.TransferPlaceholders",
+                        result,
+                        request.ConnectionKey.Internal,
+                        request.RequestKey.Internal,
+                        request.Request.NormalizedPath);
                     throw CloudFilesException.FromHResult(
                         "CloudProviderSession.TransferPlaceholders",
                         request.Request.NormalizedPath,
@@ -1720,7 +1725,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Length = request.Request.Length,
         };
         int result = CfApi.CfExecute(&operationInfo, &parameters);
-        ObserveCompletionResult("CloudProviderSession.TransferDataFailure", result);
+        ObserveCompletionResult(
+            "CloudProviderSession.TransferDataFailure",
+            result,
+            request.ConnectionKey.Internal,
+            request.RequestKey.Internal,
+            request.Request.NormalizedPath);
     }
 
     private static unsafe void SendPlaceholderFailure(
@@ -1744,7 +1754,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             PlaceholderCount = 0,
         };
         int result = CfApi.CfExecute(&operationInfo, &parameters);
-        ObserveCompletionResult("CloudProviderSession.TransferPlaceholdersFailure", result);
+        ObserveCompletionResult(
+            "CloudProviderSession.TransferPlaceholdersFailure",
+            result,
+            request.ConnectionKey.Internal,
+            request.RequestKey.Internal,
+            request.Request.NormalizedPath);
     }
 
     private static unsafe void SendAckData(
@@ -1766,7 +1781,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             Length = request.Request.Range.Length,
         };
         int result = CfApi.CfExecute(&operationInfo, &parameters);
-        ObserveCompletionResult("CloudProviderSession.AcknowledgeData", result);
+        ObserveCompletionResult(
+            "CloudProviderSession.AcknowledgeData",
+            result,
+            request.ConnectionKey.Internal,
+            request.RequestKey.Internal,
+            request.Request.NormalizedPath);
     }
 
     private static unsafe void SendPolicyResult(PolicyRequest request, NtStatus status)
@@ -1806,7 +1826,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
 
         int result = CfApi.CfExecute(&operationInfo, &parameters);
-        ObserveCompletionResult("CloudProviderSession.PolicyResult", result);
+        ObserveCompletionResult(
+            "CloudProviderSession.PolicyResult",
+            result,
+            request.ConnectionKey.Internal,
+            request.RequestKey.Internal,
+            GetPolicyPath(request.Request));
     }
 
     private static unsafe void SendPolicyFailure(
@@ -1841,16 +1866,42 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
 
         int result = CfApi.CfExecute(&operationInfo, &parameters);
-        ObserveCompletionResult("CloudProviderSession.PolicyFailure", result);
+        string path = callbackInfo->NormalizedPath is null
+            ? string.Empty
+            : new string(callbackInfo->NormalizedPath);
+        ObserveCompletionResult(
+            "CloudProviderSession.PolicyFailure",
+            result,
+            callbackInfo->ConnectionKey.Internal,
+            callbackInfo->RequestKey.Internal,
+            path);
     }
 
-    private static void ObserveCompletionResult(string operation, int hresult)
+    private static void ObserveCompletionResult(
+        string operation,
+        int hresult,
+        long connectionKey,
+        long requestKey,
+        string? path)
     {
         if (hresult < 0)
         {
-            CloudDiagnostics.RecordNativeFailure(operation, hresult);
+            CloudDiagnostics.RecordNativeFailure(
+                operation,
+                hresult,
+                connectionKey,
+                requestKey,
+                path);
         }
     }
+
+    private static string? GetPolicyPath(object request) => request switch
+    {
+        CloudProviderDehydrateRequest dehydrate => dehydrate.NormalizedPath,
+        CloudProviderDeleteRequest delete => delete.NormalizedPath,
+        CloudProviderRenameRequest rename => rename.NormalizedPath,
+        _ => null,
+    };
 
     private void CompleteRequest(ActiveRequest activeRequest, NtStatus status)
     {

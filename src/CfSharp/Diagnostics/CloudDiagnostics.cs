@@ -1,12 +1,16 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CfSharp;
 
 /// <summary>Provides opt-in BCL diagnostics sources owned by CfSharp.</summary>
 /// <remarks>
 /// CfSharp does not configure exporters, loggers, or listeners. When no listener is attached the
-/// implementation keeps the fast path allocation-light. Tags must remain low-cardinality and
-/// must never contain paths, identities, content, credentials, or device identifiers.
+/// implementation keeps the fast path allocation-light. Metric tags must remain low-cardinality
+/// and must never contain paths, identities, content, credentials, or device identifiers.
+/// Native-failure activities may contain opaque request/connection identifiers and a one-way path
+/// fingerprint so a listener can correlate a failure without receiving the caller's path.
 /// </remarks>
 public static class CloudDiagnostics
 {
@@ -121,6 +125,62 @@ public static class CloudDiagnostics
             // Meter listeners are diagnostic only.
         }
     }
+
+    internal static void RecordNativeFailure(
+        string operation,
+        int? hresult,
+        long connectionKey,
+        long requestKey,
+        string? path)
+    {
+        RecordNativeFailure(operation, hresult);
+
+        Activity? activity = null;
+        bool ownsActivity = false;
+        try
+        {
+            activity = Activity.Current;
+            if (activity is null)
+            {
+                activity = ActivitySource.StartActivity(
+                    "cfsharp.native.failure",
+                    ActivityKind.Internal);
+                ownsActivity = activity is not null;
+            }
+
+            if (activity is null)
+            {
+                return;
+            }
+
+            activity.SetTag("cfsharp.operation", operation);
+            activity.SetTag("cfsharp.native.connection_key", connectionKey);
+            activity.SetTag("cfsharp.native.request_key", requestKey);
+            if (hresult is int value)
+            {
+                activity.SetTag("cfsharp.native.hresult", value);
+            }
+
+            if (!string.IsNullOrEmpty(path))
+            {
+                activity.SetTag("cfsharp.native.path_fingerprint", FingerprintPath(path));
+            }
+        }
+        catch
+        {
+            // Diagnostic listeners must never alter the native completion result.
+        }
+        finally
+        {
+            if (ownsActivity)
+            {
+                StopActivity(activity, "failed");
+            }
+        }
+    }
+
+    private static string FingerprintPath(string path) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path)))[..16];
 
     internal static void RecordProgress(CloudProgressReportResult result)
     {

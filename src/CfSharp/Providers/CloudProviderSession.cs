@@ -530,6 +530,14 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 throw new InvalidOperationException("The content provider returned an unreadable stream.");
             }
 
+            if (activeRequest.Request.Offset < 0 ||
+                activeRequest.Request.Length <= 0 ||
+                activeRequest.Request.Offset > activeRequest.Request.FileSize ||
+                activeRequest.Request.Length > activeRequest.Request.FileSize - activeRequest.Request.Offset)
+            {
+                throw new InvalidDataException("The requested range exceeds the logical file size.");
+            }
+
             if (activeRequest.Request.Offset != 0)
             {
                 if (!source.CanSeek)
@@ -539,14 +547,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 }
 
                 source.Seek(activeRequest.Request.Offset, SeekOrigin.Begin);
-            }
-
-            if (activeRequest.Request.Offset < 0 ||
-                activeRequest.Request.Length <= 0 ||
-                activeRequest.Request.Offset > activeRequest.Request.FileSize ||
-                activeRequest.Request.Length > activeRequest.Request.FileSize - activeRequest.Request.Offset)
-            {
-                throw new InvalidDataException("The requested range exceeds the logical file size.");
             }
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(

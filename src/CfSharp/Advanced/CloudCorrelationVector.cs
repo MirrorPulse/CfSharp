@@ -4,10 +4,12 @@ using CfSharp.Native;
 
 namespace CfSharp;
 
-/// <summary>Represents a validated Windows Cloud Files correlation vector value.</summary>
+/// <summary>Represents a buffer-safe Windows Cloud Files correlation vector value.</summary>
 /// <remarks>
 /// The value is telemetry metadata, not a synchronization revision. Only native versions 1 and
-/// 2 are accepted. The managed value owns no native memory and can be copied freely.
+/// 2 are accepted. The managed value owns no native memory and can be copied freely. The managed
+/// checks enforce the native buffer size and printable ASCII representation; Windows remains the
+/// authority for any version-specific correlation-vector grammar.
 /// </remarks>
 public readonly struct CloudCorrelationVector : IEquatable<CloudCorrelationVector>
 {
@@ -18,7 +20,7 @@ public readonly struct CloudCorrelationVector : IEquatable<CloudCorrelationVecto
     /// <param name="version">Native vector version, currently 1 or 2.</param>
     /// <param name="value">Non-empty printable ASCII vector payload.</param>
     /// <exception cref="ArgumentOutOfRangeException">The version is unsupported.</exception>
-    /// <exception cref="ArgumentException">The payload is not a valid native vector string.</exception>
+    /// <exception cref="ArgumentException">The payload cannot be represented in the native vector buffer.</exception>
     public CloudCorrelationVector(byte version, string value)
     {
         if (version is not (1 or 2))
@@ -34,7 +36,7 @@ public readonly struct CloudCorrelationVector : IEquatable<CloudCorrelationVecto
     /// <summary>Gets the native vector version.</summary>
     public byte Version { get; }
 
-    /// <summary>Gets the validated ASCII payload.</summary>
+    /// <summary>Gets the printable ASCII payload accepted by the managed buffer contract.</summary>
     public string Value { get; }
 
     /// <summary>Creates a validated vector.</summary>

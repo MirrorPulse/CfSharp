@@ -129,12 +129,27 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
         }
 
         FileStream ownerLock = AcquireOwnerLock();
+        SqlitePathHandleLease? databaseLease = null;
         string connectionString = CreateConnectionString();
         try
         {
-            // Re-check after opening the ownership sidecar. This closes the ordinary
-            // check-then-open window for parent/database/lock path substitutions; the
-            // lock itself is opened with FILE_FLAG_OPEN_REPARSE_POINT below.
+            // Hold the verified parent chain and database object while SQLite opens its own
+            // handles. The handles deny delete sharing, so a writable peer cannot replace the
+            // checked path components between validation and SQLite's path-based open.
+            databaseLease = SqlitePathHandleLease.Open(DatabasePath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            await ownerLock.DisposeAsync().ConfigureAwait(false);
+            throw CreateException(
+                SqliteCloudStateStoreError.InvalidPath,
+                "The SQLite database path could not be bound to verified handles.",
+                exception);
+        }
+
+        try
+        {
             ValidateSafeLocation(context.SyncRootPath);
             await SqliteSchema.InitializeAsync(
                 connectionString,
@@ -146,10 +161,12 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
                 connectionString,
                 _busyTimeoutMilliseconds,
                 DatabasePath,
-                ownerLock);
+                ownerLock,
+                databaseLease);
         }
         catch
         {
+            databaseLease?.Dispose();
             try
             {
                 SqliteConnectionPool.Clear(connectionString);
@@ -280,6 +297,24 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
                 new Win32Exception(error));
         }
 
+        try
+        {
+            SqlitePathHandleLease.EnsureNotReparsePoint(handle, lockPath);
+        }
+        catch (IOException exception)
+        {
+            handle.Dispose();
+            throw CreateException(
+                SqliteCloudStateStoreError.InvalidPath,
+                "The SQLite ownership lock cannot be a reparse point.",
+                exception);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+
         return new FileStream(handle, FileAccess.ReadWrite, bufferSize: 1, isAsync: false);
     }
 
@@ -330,6 +365,7 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
     private readonly int _busyTimeoutMilliseconds;
     private readonly string _databasePath;
     private readonly FileStream _ownerLock;
+    private readonly SqlitePathHandleLease _databaseLease;
     private int _activeTransactions;
     private bool _disposed;
 
@@ -337,12 +373,14 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
         string connectionString,
         int busyTimeoutMilliseconds,
         string databasePath,
-        FileStream ownerLock)
+        FileStream ownerLock,
+        SqlitePathHandleLease databaseLease)
     {
         _connectionString = connectionString;
         _busyTimeoutMilliseconds = busyTimeoutMilliseconds;
         _databasePath = databasePath;
         _ownerLock = ownerLock;
+        _databaseLease = databaseLease;
     }
 
     public async ValueTask<ICloudStateTransaction> BeginTransactionAsync(
@@ -414,6 +452,7 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
         }
         finally
         {
+            _databaseLease.Dispose();
             await _ownerLock.DisposeAsync().ConfigureAwait(false);
         }
     }
@@ -424,6 +463,190 @@ internal sealed class SqliteCloudStateStore : ICloudStateStore
         {
             _activeTransactions--;
         }
+    }
+}
+
+/// <summary>Retains no-delete handles for the SQLite parent chain and database file.</summary>
+internal sealed class SqlitePathHandleLease : IDisposable
+{
+    private const uint GenericRead = 0x80000000;
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileReadAttributes = 0x00000080;
+    private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
+    private const uint OpenExisting = 3;
+    private const uint OpenAlways = 4;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileFlagWriteThrough = 0x80000000;
+    private const int FileAttributeTagInformation = 9;
+    private const uint FileAttributeReparsePoint = 0x00000400;
+
+    private readonly List<SafeFileHandle> _handles;
+
+    private SqlitePathHandleLease(List<SafeFileHandle> handles)
+    {
+        _handles = handles;
+    }
+
+    internal static SqlitePathHandleLease Open(string databasePath)
+    {
+        string fullDatabasePath = Path.GetFullPath(databasePath);
+        string parentPath = Path.GetDirectoryName(fullDatabasePath) ??
+            throw new IOException("The SQLite database has no parent directory.");
+        List<SafeFileHandle> handles = [];
+        try
+        {
+            OpenDirectoryChain(parentPath, handles);
+            SafeFileHandle database = CreateFileW(
+                fullDatabasePath,
+                GenericRead | GenericWrite,
+                FileShareRead | FileShareWrite,
+                IntPtr.Zero,
+                OpenAlways,
+                FileFlagOpenReparsePoint | FileFlagWriteThrough,
+                IntPtr.Zero);
+            if (database.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                database.Dispose();
+                throw new IOException(
+                    $"The SQLite database '{fullDatabasePath}' could not be opened without delete sharing.",
+                    new Win32Exception(error));
+            }
+
+            try
+            {
+                EnsureNotReparsePoint(database, fullDatabasePath);
+                handles.Add(database);
+            }
+            catch
+            {
+                database.Dispose();
+                throw;
+            }
+
+            return new SqlitePathHandleLease(handles);
+        }
+        catch
+        {
+            foreach (SafeFileHandle handle in handles)
+            {
+                handle.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    internal static void EnsureNotReparsePoint(SafeFileHandle handle, string path)
+    {
+        int size = Marshal.SizeOf<FileAttributeTagInfo>();
+        nint buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (!GetFileInformationByHandleEx(
+                    handle,
+                    FileAttributeTagInformation,
+                    buffer,
+                    (uint)size))
+            {
+                throw new IOException(
+                    $"The SQLite path component '{path}' attributes could not be read.",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            FileAttributeTagInfo info = Marshal.PtrToStructure<FileAttributeTagInfo>(buffer);
+            if ((info.FileAttributes & FileAttributeReparsePoint) != 0 || info.ReparseTag != 0)
+            {
+                throw new IOException($"The SQLite path component '{path}' cannot be a reparse point.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public void Dispose()
+    {
+        for (int index = _handles.Count - 1; index >= 0; index--)
+        {
+            _handles[index].Dispose();
+        }
+
+        _handles.Clear();
+    }
+
+    private static void OpenDirectoryChain(string directoryPath, List<SafeFileHandle> handles)
+    {
+        string volumeRoot = Path.GetPathRoot(directoryPath)!;
+        string current = volumeRoot;
+        OpenDirectory(current, handles);
+        string remainder = directoryPath[volumeRoot.Length..];
+        foreach (string segment in remainder.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            OpenDirectory(current, handles);
+        }
+    }
+
+    private static void OpenDirectory(string path, List<SafeFileHandle> handles)
+    {
+        SafeFileHandle handle = CreateFileW(
+            path,
+            FileReadAttributes,
+            FileShareRead | FileShareWrite,
+            IntPtr.Zero,
+            OpenExisting,
+            FileFlagOpenReparsePoint | FileFlagBackupSemantics,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new IOException(
+                $"The SQLite parent directory '{path}' could not be opened without delete sharing.",
+                new Win32Exception(error));
+        }
+
+        try
+        {
+            EnsureNotReparsePoint(handle, path);
+            handles.Add(handle);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle fileHandle,
+        int fileInformationClass,
+        nint fileInformation,
+        uint bufferSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo
+    {
+        internal uint FileAttributes;
+        internal uint ReparseTag;
     }
 }
 

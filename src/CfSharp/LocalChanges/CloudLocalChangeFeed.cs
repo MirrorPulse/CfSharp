@@ -321,7 +321,15 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Synchronously stops the watcher and processor.</summary>
-    /// <remarks>Use <see cref="DisposeAsync"/> on UI or single-threaded contexts.</remarks>
+    /// <remarks>
+    /// Use <see cref="DisposeAsync"/> on UI or single-threaded contexts. If the processor does
+    /// not stop within the configured shutdown timeout, this method blocks until the timeout and
+    /// propagates <see cref="TimeoutException"/> while deferred cleanup continues in the
+    /// background.
+    /// </remarks>
+    /// <exception cref="TimeoutException">
+    /// The processor did not stop within the configured shutdown timeout.
+    /// </exception>
     public void Dispose()
     {
         DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -329,6 +337,10 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Stops the watcher and releases all feed-owned resources.</summary>
+    /// <exception cref="TimeoutException">
+    /// The processor did not stop within the configured shutdown timeout. Deferred cleanup keeps
+    /// feed-owned resources alive until the processor exits.
+    /// </exception>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

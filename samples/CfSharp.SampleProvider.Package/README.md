@@ -11,9 +11,10 @@ through protected secrets. The manifest uses `CN=MirrorPulse Team` as the source
 publisher placeholder and must be replaced with the identity that owns the release
 certificate.
 
-The SVG is source artwork for the brand. The packaging pipeline must validate the
-asset format accepted by the selected Visual Studio/MSIX toolchain and generate the
-required scale-qualified PNG assets before publishing.
+`Assets/Logo.svg` is the editable source artwork; the checked-in `Logo.png` and
+`Logo44.png` are the initial package assets. The packaging pipeline must validate
+the scale-qualified asset set accepted by the selected Visual Studio/MSIX toolchain
+before publishing.
 
 The package project is kept outside `CfSharp.sln` because the regular .NET CI build
 does not install the Visual Studio Appx targets. Package validation belongs in a

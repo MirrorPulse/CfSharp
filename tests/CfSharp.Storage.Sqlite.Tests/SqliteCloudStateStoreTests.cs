@@ -9,6 +9,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     private string _syncRootPath = null!;
     private string _databasePath = null!;
     private string? _directoryLinkPath;
+    private string? _sidecarLinkPath;
 
     public Task InitializeAsync()
     {
@@ -27,6 +28,11 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         if (_directoryLinkPath is not null && Directory.Exists(_directoryLinkPath))
         {
             Directory.Delete(_directoryLinkPath);
+        }
+
+        if (_sidecarLinkPath is not null && File.Exists(_sidecarLinkPath))
+        {
+            File.Delete(_sidecarLinkPath);
         }
 
         if (Directory.Exists(_temporaryDirectory))
@@ -119,6 +125,25 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
                 await factory.OpenAsync(CreateContext()));
 
         Assert.Equal(SqliteCloudStateStoreError.PathInsideSyncRoot, exception.Error);
+    }
+
+    [Fact]
+    public async Task ReparsePointWalSidecarIsRejected()
+    {
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        string target = Path.Combine(_temporaryDirectory, "wal-target");
+        await File.WriteAllTextAsync(target, "sidecar target");
+        _sidecarLinkPath = _databasePath + "-wal";
+        File.CreateSymbolicLink(_sidecarLinkPath, target);
+
+        SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await CreateFactory().OpenAsync(CreateContext()));
+
+        Assert.Equal(SqliteCloudStateStoreError.InvalidPath, exception.Error);
     }
 
     [Fact]

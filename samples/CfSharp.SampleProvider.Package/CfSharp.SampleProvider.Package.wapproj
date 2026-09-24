@@ -5,7 +5,7 @@
     <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <DefaultLanguage>en-US</DefaultLanguage>
-    <Platforms>x64</Platforms>
+    <Platforms>x64;ARM64</Platforms>
     <AppxBundle>Never</AppxBundle>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
   </PropertyGroup>

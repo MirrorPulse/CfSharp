@@ -8,6 +8,37 @@ namespace CfSharp.SampleProvider.Tests;
 public sealed class SamplePathSafetyTests
 {
     [Fact]
+    public void ArgumentsRequireAnExplicitCommandAndStateDatabase()
+    {
+        Assert.False(SampleArguments.TryParse([], out _, out _));
+        Assert.False(
+            SampleArguments.TryParse(
+                ["run", "content", "root", "--once"],
+                out _,
+                out _));
+    }
+
+    [Fact]
+    public void ArgumentsParseRunAndLifecycleCommands()
+    {
+        Assert.True(
+            SampleArguments.TryParse(
+                ["run", "content", "root", "--state-db", "state.db", "--once"],
+                out SampleArguments? run,
+                out _));
+        Assert.Equal(SampleCommand.Run, run!.Command);
+        Assert.True(run.RunOnce);
+        Assert.Equal("state.db", run.StateDatabasePath);
+
+        Assert.True(
+            SampleArguments.TryParse(
+                ["unregister", "root"],
+                out SampleArguments? unregister,
+                out _));
+        Assert.Equal(SampleCommand.Unregister, unregister!.Command);
+    }
+
+    [Fact]
     public void ResolveContainedPathRejectsLexicalEscape()
     {
         using TemporaryDirectory root = new();

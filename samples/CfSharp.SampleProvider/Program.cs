@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Runtime.Versioning;
 using System.Text;
 using CfSharp;
+using CfSharp.Storage.Sqlite;
 
 return await SampleProvider.RunAsync(args);
 
@@ -18,30 +20,112 @@ internal static class SampleProvider
             return 1;
         }
 
-        if (args.Length != 2)
+        if (!SampleArguments.TryParse(args, out SampleArguments? options, out string error))
         {
-            Console.Error.WriteLine(
-                "Usage: CfSharp.SampleProvider <content-directory> <sync-root-directory>");
+            Console.Error.WriteLine(error);
             return 2;
         }
 
-        string contentRoot = SamplePathSafety.NormalizeExistingDirectory(args[0], "content");
-        string syncRootPath = Path.GetFullPath(args[1]);
+        SampleArguments selectedOptions = options!;
+
+        try
+        {
+            return selectedOptions.Command switch
+            {
+                SampleCommand.Register => Register(selectedOptions.SyncRootPath),
+                SampleCommand.Unregister => Unregister(selectedOptions.SyncRootPath),
+                SampleCommand.Run => await RunProviderAsync(selectedOptions),
+                _ => throw new InvalidOperationException("The sample command is not supported."),
+            };
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException or
+            CloudFilesException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"CfSharp Sample failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static int Register(string requestedSyncRootPath)
+    {
+        string syncRootPath = Path.GetFullPath(requestedSyncRootPath);
         Directory.CreateDirectory(syncRootPath);
         syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
-        SyncRootRegistrationOptions registration =
-            SyncRootRegistrationOptions.CreateBuilder("CfSharp Sample Provider", "0.1.0")
-                .WithProviderId(ProviderId)
-                .WithSyncRootIdentity(ProviderId.ToByteArray())
-                .WithHydrationPolicy(CloudHydrationPolicy.Progressive)
-                .WithPopulationPolicy(CloudPopulationPolicy.Partial)
-                .WithRootMarkedInSync()
-                .Build();
-        CloudSyncRoot syncRoot = CloudSyncRoot.Register(syncRootPath, registration);
+        CloudSyncRoot syncRoot = CloudSyncRoot.Register(syncRootPath, CreateRegistration());
+        CloudSyncRootInfo info = syncRoot.GetInfo();
+        Console.WriteLine($"Registered CfSharp Sample at {info.Path}");
+        Console.WriteLine($"Provider: {info.ProviderName} {info.ProviderVersion}");
+        return 0;
+    }
 
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static int Unregister(string requestedSyncRootPath)
+    {
+        string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
+            requestedSyncRootPath,
+            "sync-root");
+        CloudSyncRoot.Open(syncRootPath).Unregister();
+        Console.WriteLine($"Unregistered CfSharp Sample from {syncRootPath}");
+        return 0;
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static async Task<int> RunProviderAsync(SampleArguments options)
+    {
+        string contentRoot = SamplePathSafety.NormalizeExistingDirectory(
+            options.ContentRoot!,
+            "content");
+        string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
+            options.SyncRootPath,
+            "sync-root");
+        CloudSyncRoot syncRoot = CloudSyncRoot.Open(syncRootPath);
         LocalFolderContentProvider provider = new(contentRoot, syncRootPath);
-        await using CloudProviderSession session = CloudProviderSession.Connect(syncRoot, provider);
+        SqliteCloudStateStoreFactory stateStoreFactory = new(options.StateDatabasePath!);
+        await using CloudFileSystem fileSystem = CloudFileSystem
+            .CreateBuilder(syncRootPath)
+            .WithStateStore(stateStoreFactory)
+            .WithContentProvider(provider)
+            .Build();
 
+        using CancellationTokenSource shutdown = new();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            shutdown.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            await fileSystem.StartAsync(shutdown.Token);
+            await ExerciseShellFacingProviderAsync(syncRootPath, contentRoot, shutdown.Token);
+            Console.WriteLine($"Sync root: {syncRoot.Path}");
+            Console.WriteLine("The registration remains installed; use the unregister command for removal.");
+            if (!options.RunOnce)
+            {
+                Console.WriteLine("Provider is running. Press Ctrl+C to stop without unregistering.");
+                await Task.Delay(Timeout.InfiniteTimeSpan, shutdown.Token);
+            }
+
+            return 0;
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+            return 0;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    [SupportedOSPlatform("windows10.0.16299")]
+    private static async Task ExerciseShellFacingProviderAsync(
+        string syncRootPath,
+        string contentRoot,
+        CancellationToken cancellationToken)
+    {
         // Use a separate process for the first enumeration. Windows does not always issue a
         // FETCH_PLACEHOLDERS callback for an enumeration initiated by the provider process
         // itself; an external consumer reliably exercises the same shell-facing path.
@@ -50,6 +134,7 @@ internal static class SampleProvider
             FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
             RedirectStandardError = true,
         })!)
         {
@@ -60,10 +145,14 @@ internal static class SampleProvider
             enumerationProcess.StartInfo.ArgumentList.Add("/b");
             enumerationProcess.StartInfo.ArgumentList.Add("/a:-l");
             enumerationProcess.StartInfo.ArgumentList.Add(syncRootPath);
-            await enumerationProcess.WaitForExitAsync();
+            Task<string> outputTask = enumerationProcess.StandardOutput.ReadToEndAsync(
+                CancellationToken.None);
+            await enumerationProcess.WaitForExitAsync(cancellationToken);
+            _ = await outputTask;
             if (enumerationProcess.ExitCode != 0)
             {
-                string error = await enumerationProcess.StandardError.ReadToEndAsync();
+                string error = await enumerationProcess.StandardError.ReadToEndAsync(
+                    CancellationToken.None);
                 throw new InvalidOperationException(
                     $"The external sync-root enumeration failed with exit code {enumerationProcess.ExitCode}: {error}");
             }
@@ -85,22 +174,24 @@ internal static class SampleProvider
         foreach (string placeholderFile in placeholderFiles.Take(4))
         {
             string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
-            FileInfo sourceInfo = new(Path.Combine(contentRoot, relativePath));
+            FileInfo sourceInfo = new(SamplePathSafety.ResolveContainedPath(
+                contentRoot,
+                Path.Combine(contentRoot, relativePath)));
             long offset = sourceInfo.Length == 0 ? 0 : sourceInfo.Length / 2;
             int length = (int)Math.Min(1024, sourceInfo.Length - offset);
-            randomReads.Add(ReadRangeAsync(placeholderFile, offset, length));
+            randomReads.Add(ReadRangeAsync(placeholderFile, offset, length, cancellationToken));
         }
 
         byte[][] ranges = await Task.WhenAll(randomReads);
-
-        Console.WriteLine($"Sync root: {syncRoot.Path}");
         Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
         Console.WriteLine($"Concurrent random ranges hydrated: {ranges.Length}");
-        Console.WriteLine("The registration remains installed; call CloudSyncRoot.Unregister only when removing it.");
-        return 0;
     }
 
-    private static async Task<byte[]> ReadRangeAsync(string path, long offset, int length)
+    private static async Task<byte[]> ReadRangeAsync(
+        string path,
+        long offset,
+        int length,
+        CancellationToken cancellationToken)
     {
         await using FileStream stream = new(
             path,
@@ -111,9 +202,19 @@ internal static class SampleProvider
             FileOptions.Asynchronous | FileOptions.RandomAccess);
         stream.Position = offset;
         byte[] buffer = new byte[length];
-        int read = await stream.ReadAsync(buffer);
+        int read = await stream.ReadAsync(buffer, cancellationToken);
         return buffer[..read];
     }
+
+    private static SyncRootRegistrationOptions CreateRegistration() =>
+        SyncRootRegistrationOptions.CreateBuilder("CfSharp Sample", "0.1.0")
+            .WithProviderId(ProviderId)
+            .WithSyncRootIdentity(ProviderId.ToByteArray())
+            .WithHydrationPolicy(CloudHydrationPolicy.Progressive)
+            .WithPopulationPolicy(CloudPopulationPolicy.Partial)
+            .WithRootMarkedInSync()
+            .WithExistingRegistrationUpdate()
+            .Build();
 
     private sealed class LocalFolderContentProvider : ICloudDemandProvider
     {

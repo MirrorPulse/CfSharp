@@ -6,5 +6,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CfSharp\CfSharp.csproj" />
+    <ProjectReference Include="..\..\src\CfSharp.Storage.Sqlite\CfSharp.Storage.Sqlite.csproj" />
   </ItemGroup>
 </Project>

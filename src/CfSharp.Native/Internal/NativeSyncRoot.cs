@@ -107,7 +107,7 @@ internal static unsafe class NativeSyncRoot
         }
     }
 
-    private static string ReadFixedString(char* value, int capacity)
+    internal static string ReadFixedString(char* value, int capacity)
     {
         ReadOnlySpan<char> span = new(value, capacity);
         int terminator = span.IndexOf('\0');

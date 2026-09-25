@@ -21,6 +21,10 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Verify supported platform matrix
+        shell: pwsh
+        run: ./eng/verify-platform-matrix.ps1
+
       - name: Restore
         run: dotnet restore CfSharp.sln
 

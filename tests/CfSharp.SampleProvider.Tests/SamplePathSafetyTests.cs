@@ -87,6 +87,41 @@ public sealed class SamplePathSafetyTests
     }
 
     [Fact]
+    public void ContentComparisonRunsInAnIndependentSystemProcess()
+    {
+        ProcessStartInfo startInfo = global::SampleProvider.CreateContentComparisonProcessStartInfo(
+            @"C:\Sample\content\source.bin",
+            @"C:\Sample\sync-root\source.bin");
+
+        Assert.Equal(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", startInfo.FileName);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Equal(
+            [
+                "/d",
+                "/c",
+                "fc",
+                "/b",
+                "/offline",
+                @"C:\Sample\content\source.bin",
+                @"C:\Sample\sync-root\source.bin",
+            ],
+            startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public void ContentComparisonKeepsSourceAndPlaceholderAsSeparateArguments()
+    {
+        ProcessStartInfo startInfo = global::SampleProvider.CreateContentComparisonProcessStartInfo(
+            @"C:\Sample\content",
+            @"C:\Sample\sync-root");
+
+        Assert.Equal(@"C:\Sample\content", startInfo.ArgumentList[^2]);
+        Assert.Equal(@"C:\Sample\sync-root", startInfo.ArgumentList[^1]);
+    }
+
+    [Fact]
     public void OnlyTheKnownMissingCloudRootStateIsTreatedAsStale()
     {
         CloudFilesException stale = CloudFilesException.FromHResult(

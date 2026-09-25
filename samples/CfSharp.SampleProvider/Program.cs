@@ -225,33 +225,35 @@ internal static class SampleProvider
 
             // Descendant enumeration repeats this for every partial directory and exercises the
             // continuation-token path without requiring the sample to pre-materialize the tree.
-            List<Task<byte[]>> randomReads = [];
+            List<Task> externalReads = [];
             foreach (string placeholderFile in placeholderFiles.Take(4))
             {
                 string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
-                FileInfo sourceInfo = new(SamplePathSafety.ResolveContainedPath(
+                string sourcePath = SamplePathSafety.ResolveContainedPath(
                     contentRoot,
-                    Path.Combine(contentRoot, relativePath)));
+                    Path.Combine(contentRoot, relativePath));
+                FileInfo sourceInfo = new(sourcePath);
                 if (sourceInfo.Length == 0)
                 {
                     continue;
                 }
 
-                long offset = sourceInfo.Length / 2;
-                int length = (int)Math.Min(1024, sourceInfo.Length - offset);
-                randomReads.Add(ReadRangeAsync(placeholderFile, offset, length, cancellationToken));
+                externalReads.Add(VerifyExternalContentAsync(
+                    placeholderFile,
+                    sourcePath,
+                    cancellationToken));
             }
 
-            if (randomReads.Count == 0)
+            if (externalReads.Count == 0)
             {
                 throw new InvalidOperationException(
                     "The external sync-root enumeration returned no non-empty files for the " +
                     "concurrent hydration self-check.");
             }
 
-            byte[][] ranges = await Task.WhenAll(randomReads);
+            await Task.WhenAll(externalReads);
             Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
-            Console.WriteLine($"Concurrent random ranges hydrated: {ranges.Length}");
+            Console.WriteLine($"Concurrent external hydrations verified: {externalReads.Count}");
         }
     }
 
@@ -274,23 +276,59 @@ internal static class SampleProvider
         return startInfo;
     }
 
-    private static async Task<byte[]> ReadRangeAsync(
-        string path,
-        long offset,
-        int length,
+    internal static async Task VerifyExternalContentAsync(
+        string placeholderPath,
+        string sourcePath,
         CancellationToken cancellationToken)
     {
-        await using FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite,
-            bufferSize: 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
-        stream.Position = offset;
-        byte[] buffer = new byte[length];
-        int read = await stream.ReadAsync(buffer, cancellationToken);
-        return buffer[..read];
+        using Process comparison = Process.Start(CreateContentComparisonProcessStartInfo(
+            sourcePath,
+            placeholderPath)) ?? throw new InvalidOperationException(
+                "The external content comparison process could not be started.");
+        try
+        {
+            Task<string> outputTask = comparison.StandardOutput.ReadToEndAsync(CancellationToken.None);
+            Task<string> errorTask = comparison.StandardError.ReadToEndAsync(CancellationToken.None);
+            await comparison.WaitForExitAsync(cancellationToken);
+            string output = await outputTask;
+            string error = await errorTask;
+            if (comparison.ExitCode != 0)
+            {
+                throw new InvalidDataException(
+                    $"The external content comparison failed for '{placeholderPath}' with exit " +
+                    $"code {comparison.ExitCode}: {error}{output}");
+            }
+        }
+        finally
+        {
+            if (!comparison.HasExited)
+            {
+                comparison.Kill(entireProcessTree: true);
+                await comparison.WaitForExitAsync(CancellationToken.None);
+            }
+        }
+    }
+
+    internal static ProcessStartInfo CreateContentComparisonProcessStartInfo(
+        string sourcePath,
+        string placeholderPath)
+    {
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("fc");
+        startInfo.ArgumentList.Add("/b");
+        startInfo.ArgumentList.Add("/offline");
+        startInfo.ArgumentList.Add(sourcePath);
+        startInfo.ArgumentList.Add(placeholderPath);
+        return startInfo;
     }
 
     private static SyncRootRegistrationOptions CreateRegistration() =>

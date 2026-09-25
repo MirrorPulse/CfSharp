@@ -10,12 +10,22 @@ public sealed class AbiProbeComparisonTests
     private const string ProbePathEnvironmentVariable = "CFSHARP_ABI_PROBE_JSON";
 
     [Fact]
-    public void ManagedLayoutsAndConstantsMatchNativeProbeWhenProvided()
+    [Trait("Category", "AbiProbe")]
+    public void ManagedLayoutsAndConstantsMatchNativeProbe()
     {
         string? probePath = Environment.GetEnvironmentVariable(ProbePathEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(probePath))
         {
-            return;
+            throw new InvalidOperationException(
+                $"{ProbePathEnvironmentVariable} is required for the ABI comparison test. " +
+                "Run the native ABI probe job or explicitly exclude Category=AbiProbe.");
+        }
+
+        if (!File.Exists(probePath))
+        {
+            throw new FileNotFoundException(
+                $"The native ABI probe JSON was not found at '{probePath}'.",
+                probePath);
         }
 
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(probePath));

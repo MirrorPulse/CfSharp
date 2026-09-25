@@ -31,7 +31,7 @@ jobs:
         run: dotnet build CfSharp.sln --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test CfSharp.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
+        run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 
       - name: Pack native bindings
         run: dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build --output artifacts/packages
@@ -83,6 +83,18 @@ jobs:
 
       - name: Restore native tests
         run: dotnet restore tests/CfSharp.Native.Tests/CfSharp.Native.Tests.csproj
+
+      - name: Verify native ABI evidence
+        shell: pwsh
+        run: |
+          $probePath = Join-Path $env:GITHUB_WORKSPACE 'artifacts/abi-probe/x64.json'
+          if (-not (Test-Path -LiteralPath $probePath -PathType Leaf)) {
+            throw "Native ABI probe JSON is missing: $probePath"
+          }
+          $probe = Get-Content -LiteralPath $probePath -Raw | ConvertFrom-Json
+          if ($null -eq $probe -or $probe.pointerSize -ne 8) {
+            throw "Native ABI probe JSON is empty or not an x64 probe: $probePath"
+          }
 
       - name: Compare managed and native ABI
         run: dotnet test tests/CfSharp.Native.Tests/CfSharp.Native.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=abi-test-results.trx"

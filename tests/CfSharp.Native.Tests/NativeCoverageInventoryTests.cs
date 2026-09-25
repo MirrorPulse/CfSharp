@@ -89,6 +89,61 @@ public sealed class NativeCoverageInventoryTests
     }
 
     [Fact]
+    public void CapabilityMatrixMatchesPinnedCloudFilesContract()
+    {
+        using JsonDocument document = LoadInventory();
+        JsonElement root = document.RootElement;
+        JsonElement header = root.GetProperty("header");
+
+        Assert.Equal("10.0.16299", header.GetProperty("defaultMinimumWindowsVersion").GetString());
+
+        Dictionary<string, uint> expectedGates = new(StringComparer.Ordinal)
+        {
+            ["CF_PLACEHOLDER_MANAGEMENT_POLICY non-default flags"] = 784,
+            ["CF_HYDRATION_POLICY_MODIFIER_ALLOW_FULL_RESTART_HYDRATION"] = 1280,
+            ["CF_CONVERT_FLAG_FORCE_CONVERT_TO_CLOUD_FILE"] = 1280,
+            ["CfGetPlaceholderRangeInfoForHydration"] = 1536,
+        };
+
+        Dictionary<string, uint> actualGates = root
+            .GetProperty("capabilityGates")
+            .EnumerateArray()
+            .ToDictionary(
+                gate => gate.GetProperty("nativeName").GetString()!,
+                gate => gate.GetProperty("minimumIntegrationNumber").GetUInt32(),
+                StringComparer.Ordinal);
+
+        Assert.Equal(expectedGates.Count, actualGates.Count);
+        foreach ((string nativeName, uint minimumIntegrationNumber) in expectedGates)
+        {
+            Assert.True(actualGates.TryGetValue(nativeName, out uint actualMinimum), nativeName);
+            Assert.Equal(minimumIntegrationNumber, actualMinimum);
+        }
+
+        Version defaultWindowsVersion = Version.Parse(header.GetProperty("defaultMinimumWindowsVersion").GetString()!);
+        foreach (JsonProperty overrideVersion in root.GetProperty("versionOverrides").EnumerateObject())
+        {
+            Version parsedVersion = Version.Parse(overrideVersion.Value.GetString()!);
+            Assert.True(parsedVersion >= defaultWindowsVersion, overrideVersion.Name);
+        }
+
+        JsonElement hydrationRoute = root
+            .GetProperty("routeMetadata")
+            .GetProperty("routes")
+            .GetProperty("CfGetPlaceholderRangeInfoForHydration");
+        Assert.Equal("10.0.16299", hydrationRoute.GetProperty("minimumWindowsVersion").GetString());
+        Assert.Equal(1536u, hydrationRoute.GetProperty("minimumIntegrationNumber").GetUInt32());
+    }
+
+    [Fact]
+    public void CurrentProcessArchitectureIsInStableSupportMatrix()
+    {
+        Assert.True(
+            RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.Arm64,
+            $"Unexpected process architecture: {RuntimeInformation.ProcessArchitecture}");
+    }
+
+    [Fact]
     public void InventoryExactlyMatchesPinnedHeaderContractAndManagedSymbols()
     {
         using JsonDocument document = LoadInventory();

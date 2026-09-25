@@ -202,6 +202,75 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
         Assert.Single(batch.Changes);
     }
 
+    [Fact]
+    public async Task BoundedJournalReplaySurvivesFeedRestart()
+    {
+        const int seed = 20260926;
+        const int eventCount = 48;
+        const int eventsBeforeRestart = 24;
+        string[] paths = Enumerable
+            .Range(0, eventCount)
+            .Select(index =>
+                $"recovery-{seed}-{index:D3}-{new Random(seed + index).NextInt64():X16}.txt")
+            .ToArray();
+        CloudLocalChangeFeedOptions options = new()
+        {
+            BufferCapacity = 64,
+            BatchSize = 7,
+            ShutdownTimeout = TimeSpan.FromSeconds(5),
+        };
+
+        await using ICloudStateStore store = await OpenStoreAsync();
+        int acknowledged = 0;
+        FakeSource source = new();
+        await using (CloudLocalChangeFeed feed = CloudLocalChangeFeed.CreateForTesting(
+            _syncRootPath,
+            store,
+            options,
+            source))
+        {
+            await feed.StartAsync();
+            for (int index = 0; index < eventsBeforeRestart; index++)
+            {
+                await source.EmitAsync(new(LocalChangeSourceAction.Created, paths[index]));
+            }
+
+            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(10));
+            CloudLocalChangeBatch batch = await feed.ReadBatchAsync(timeout.Token);
+            Assert.NotEmpty(batch.Changes);
+            acknowledged = batch.Changes.Count;
+            await feed.AcknowledgeAsync(batch.Changes.Select(change => change.OperationId), timeout.Token);
+        }
+
+        FakeSource restartedSource = new();
+        await using CloudLocalChangeFeed restarted = CloudLocalChangeFeed.CreateForTesting(
+            _syncRootPath,
+            store,
+            options,
+            restartedSource);
+        await restarted.StartAsync();
+        for (int index = eventsBeforeRestart; index < eventCount; index++)
+        {
+            await restartedSource.EmitAsync(new(LocalChangeSourceAction.Created, paths[index]));
+        }
+
+        using CancellationTokenSource replayTimeout = new(TimeSpan.FromSeconds(10));
+        while (acknowledged < eventCount)
+        {
+            CloudLocalChangeBatch batch = await restarted.ReadBatchAsync(replayTimeout.Token);
+            Assert.False(batch.RequiresFullRescan);
+            Assert.NotEmpty(batch.Changes);
+            acknowledged += batch.Changes.Count;
+            await restarted.AcknowledgeAsync(
+                batch.Changes.Select(change => change.OperationId),
+                replayTimeout.Token);
+        }
+
+        await using ICloudStateTransaction transaction = await store.BeginTransactionAsync();
+        Assert.Empty(await transaction.Operations.ListAsync(10));
+        await transaction.RollbackAsync();
+    }
+
     private CloudLocalChangeFeed CreateFeed(ICloudStateStore store, FakeSource source) =>
         CloudLocalChangeFeed.CreateForTesting(
             _syncRootPath,

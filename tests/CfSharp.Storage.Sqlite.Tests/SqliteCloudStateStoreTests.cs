@@ -17,8 +17,10 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
 
     public Task InitializeAsync()
     {
+        string testTemporaryRoot = Environment.GetEnvironmentVariable("CFSHARP_TEST_TEMP_ROOT")
+            ?? Path.GetTempPath();
         _temporaryDirectory = Path.Combine(
-            Path.GetTempPath(),
+            testTemporaryRoot,
             "CfSharp-sqlite-tests",
             Guid.NewGuid().ToString("N"));
         _syncRootPath = Path.Combine(_temporaryDirectory, "sync-root");

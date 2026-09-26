@@ -12,6 +12,7 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $testProject = Join-Path $root 'tests/CfSharp.Storage.Sqlite.Tests/CfSharp.Storage.Sqlite.Tests.csproj'
 $env:CFSHARP_CRASH_RECOVERY_ITERATIONS = $Iterations.ToString(
     [System.Globalization.CultureInfo]::InvariantCulture)
+$env:CFSHARP_TEST_TEMP_ROOT = Join-Path $root 'artifacts/crash-recovery'
 
 try {
     & dotnet test $testProject `
@@ -28,4 +29,5 @@ try {
 }
 finally {
     Remove-Item Env:CFSHARP_CRASH_RECOVERY_ITERATIONS -ErrorAction SilentlyContinue
+    Remove-Item Env:CFSHARP_TEST_TEMP_ROOT -ErrorAction SilentlyContinue
 }

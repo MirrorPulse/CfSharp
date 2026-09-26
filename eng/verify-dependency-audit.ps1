@@ -170,6 +170,10 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
     $nuspec = Get-ChildItem -LiteralPath $packageRoot -Filter *.nuspec -File -ErrorAction SilentlyContinue |
         Select-Object -First 1
     $licenseDeclared = "NOASSERTION"
+<<<<<<< HEAD
+=======
+    $licenseSource = $null
+>>>>>>> fa96fc8 (security(deps): add audit and provenance evidence)
     if ($null -ne $nuspec)
     {
         [xml]$nuspecDocument = Get-Content -LiteralPath $nuspec.FullName -Raw
@@ -180,7 +184,7 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
         }
         elseif ($null -ne $metadata.licenseUrl -and -not [string]::IsNullOrWhiteSpace([string]$metadata.licenseUrl))
         {
-            $licenseDeclared = [string]$metadata.licenseUrl
+            $licenseSource = [string]$metadata.licenseUrl
         }
     }
 
@@ -195,7 +199,7 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
         })
     }
 
-    $spdxPackages.Add([ordered]@{
+    $spdxPackage = [ordered]@{
         SPDXID = $spdxId
         name = $package.id
         versionInfo = $package.version
@@ -209,7 +213,12 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
             referenceType = "purl"
             referenceLocator = "pkg:nuget/$($package.id)@$($package.version)"
         })
-    })
+    }
+    if ($null -ne $licenseSource)
+    {
+        $spdxPackage.licenseComments = "NuGet licenseUrl: $licenseSource"
+    }
+    $spdxPackages.Add($spdxPackage)
 }
 
 $commit = ((& git -C $repoRoot rev-parse HEAD 2>$null) | Select-Object -First 1).ToString().Trim()

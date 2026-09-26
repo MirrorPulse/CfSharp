@@ -557,6 +557,10 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                 {
                     // The feed may still be draining a journal transaction. Its owner must keep
                     // the state store alive until the deferred completion callback runs.
+                    lock (_localChangeFeedGate)
+                    {
+                        _localChangeFeed ??= localChangeFeed;
+                    }
                     return failures;
                 }
             }

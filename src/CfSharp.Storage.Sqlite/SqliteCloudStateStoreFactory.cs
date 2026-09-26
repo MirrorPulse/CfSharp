@@ -677,7 +677,8 @@ internal sealed class SqlitePathHandleLease : IDisposable
 
 internal static class SqliteSchema
 {
-    internal const int CurrentVersion = 3;
+    internal const int CurrentVersion = 4;
+    internal const string PathCollationName = "CFSHARP_UNICODE_NOCASE";
 
     internal static async Task InitializeAsync(
         string connectionString,
@@ -752,6 +753,12 @@ internal static class SqliteSchema
                     .ConfigureAwait(false);
             }
 
+            if (version < 4)
+            {
+                await MigrateVersionFourAsync(connection, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             await ValidateCurrentVersionAsync(
                 connection,
                 databasePath,
@@ -775,6 +782,9 @@ internal static class SqliteSchema
         int busyTimeoutMilliseconds,
         CancellationToken cancellationToken)
     {
+        connection.CreateCollation(
+            PathCollationName,
+            static (left, right) => StringComparer.OrdinalIgnoreCase.Compare(left, right));
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = $"""
             PRAGMA foreign_keys = ON;
@@ -826,7 +836,7 @@ internal static class SqliteSchema
             CREATE TABLE IF NOT EXISTS items (
                 item_id TEXT NOT NULL PRIMARY KEY,
                 remote_id TEXT NOT NULL UNIQUE,
-                relative_path TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                relative_path TEXT NOT NULL COLLATE CFSHARP_UNICODE_NOCASE UNIQUE,
                 kind INTEGER NOT NULL,
                 remote_revision TEXT NULL,
                 local_file_id INTEGER NULL,
@@ -877,8 +887,8 @@ internal static class SqliteSchema
                 suppression_id TEXT NOT NULL PRIMARY KEY,
                 item_id TEXT NULL,
                 kind INTEGER NOT NULL,
-                relative_path TEXT NOT NULL COLLATE NOCASE,
-                previous_relative_path TEXT NULL COLLATE NOCASE,
+                relative_path TEXT NOT NULL COLLATE CFSHARP_UNICODE_NOCASE,
+                previous_relative_path TEXT NULL COLLATE CFSHARP_UNICODE_NOCASE,
                 payload BLOB NOT NULL,
                 expires_at_ticks INTEGER NOT NULL,
                 remaining_observations INTEGER NOT NULL DEFAULT 1,
@@ -889,6 +899,8 @@ internal static class SqliteSchema
             CREATE INDEX IF NOT EXISTS ix_operations_item_sequence ON operations(item_id, sequence);
             CREATE INDEX IF NOT EXISTS ix_conflicts_created ON conflicts(created_at_ticks, conflict_id);
             CREATE INDEX IF NOT EXISTS ix_echo_expiration ON echo_suppressions(expires_at_ticks);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_items_relative_path_unicode_nocase
+                ON items(relative_path COLLATE CFSHARP_UNICODE_NOCASE);
 
             INSERT INTO cfsharp_schema(singleton, version, sync_root_path)
             VALUES (1, $version, $sync_root_path)
@@ -995,7 +1007,7 @@ internal static class SqliteSchema
             await using SqliteCommand addPreviousPath = connection.CreateCommand();
             addPreviousPath.Transaction = transaction;
             addPreviousPath.CommandText =
-                "ALTER TABLE echo_suppressions ADD COLUMN previous_relative_path TEXT NULL COLLATE NOCASE;";
+                "ALTER TABLE echo_suppressions ADD COLUMN previous_relative_path TEXT NULL COLLATE CFSHARP_UNICODE_NOCASE;";
             await addPreviousPath.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -1018,6 +1030,29 @@ internal static class SqliteSchema
             "UPDATE cfsharp_schema SET version = $version WHERE singleton = 1;";
         updateVersion.Parameters.AddWithValue("$version", 3);
         await updateVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task MigrateVersionFourAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "items", cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using SqliteTransaction transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using SqliteCommand createIndex = connection.CreateCommand();
+        createIndex.Transaction = transaction;
+        createIndex.CommandText = """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_items_relative_path_unicode_nocase
+                ON items(relative_path COLLATE CFSHARP_UNICODE_NOCASE);
+            UPDATE cfsharp_schema SET version = 4 WHERE singleton = 1;
+            """;
+        await createIndex.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1099,6 +1134,17 @@ internal static class SqliteSchema
                 SqliteCloudStateStoreError.InvalidSchema,
                 databasePath,
                 "The echo_suppressions table is missing Phase 8 observation columns.");
+        }
+
+        if (!await IndexExistsAsync(
+                connection,
+                "ux_items_relative_path_unicode_nocase",
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new SqliteCloudStateStoreException(
+                SqliteCloudStateStoreError.InvalidSchema,
+                databasePath,
+                "The items table is missing the Unicode path uniqueness index.");
         }
 
         await using (SqliteCommand foreignKeyCommand = connection.CreateCommand())
@@ -1198,6 +1244,22 @@ internal static class SqliteSchema
         }
 
         return false;
+    }
+
+    private static async Task<bool> IndexExistsAsync(
+        SqliteConnection connection,
+        string indexName,
+        CancellationToken cancellationToken)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = $name
+            );
+            """;
+        command.Parameters.AddWithValue("$name", indexName);
+        object? value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt64(value, CultureInfo.InvariantCulture) != 0;
     }
 
     private static async Task<long> CountApplicationTablesAsync(

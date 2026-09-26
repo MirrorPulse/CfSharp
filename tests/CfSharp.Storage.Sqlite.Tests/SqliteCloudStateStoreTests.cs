@@ -224,7 +224,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            3L,
+            4L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -236,7 +236,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
-    public async Task VersionOneRemoteBatchSchemaMigratesToVersionThree()
+    public async Task VersionOneRemoteBatchSchemaMigratesToVersionFour()
     {
         await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
         {
@@ -251,7 +251,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            3L,
+            4L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -264,7 +264,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
-    public async Task VersionTwoEchoSuppressionSchemaMigratesToVersionThree()
+    public async Task VersionTwoEchoSuppressionSchemaMigratesToVersionFour()
     {
         await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
         {
@@ -279,7 +279,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         }
 
         Assert.Equal(
-            3L,
+            4L,
             await ExecuteScalarInt64Async(
                 _databasePath,
                 "SELECT version FROM cfsharp_schema WHERE singleton = 1;"));
@@ -301,7 +301,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
                 singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
                 version INTEGER NOT NULL
             );
-            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 4);
+            INSERT INTO cfsharp_schema(singleton, version) VALUES(1, 5);
             """);
 
         SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<
@@ -360,6 +360,50 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
+    public async Task RelativePathCollationMatchesUnicodeCaseInsensitiveFileNames()
+    {
+        await using ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext());
+        CloudItemState upper = new(
+            Guid.NewGuid(),
+            "remote-upper",
+            "Ä.txt",
+            CloudItemKind.File,
+            null,
+            null,
+            false,
+            DateTimeOffset.UtcNow);
+        await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
+        {
+            await write.Items.UpsertAsync(upper);
+            await write.CommitAsync();
+        }
+
+        await using (ICloudStateTransaction read = await store.BeginTransactionAsync())
+        {
+            CloudItemState? equivalent = await read.Items.GetByRelativePathAsync("ä.txt");
+            Assert.Equal(upper.ItemId, equivalent?.ItemId);
+            Assert.Single(await read.Items.ListSubtreeAsync(""));
+            await read.RollbackAsync();
+        }
+
+        await using ICloudStateTransaction duplicate = await store.BeginTransactionAsync();
+        SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await duplicate.Items.UpsertAsync(
+                    new CloudItemState(
+                        Guid.NewGuid(),
+                        "remote-lower",
+                        "ä.txt",
+                        CloudItemKind.File,
+                        null,
+                        null,
+                        false,
+                        DateTimeOffset.UtcNow)));
+        Assert.Equal(19, exception.SqliteErrorCode);
+        await duplicate.RollbackAsync();
+    }
+
+    [Fact]
     public async Task StoreConnectionsEnforceForeignKeysAndPreserveSqliteCodes()
     {
         await using ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext());
@@ -414,6 +458,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         Directory.CreateDirectory(parent);
         await using SqliteConnection connection = new(CreateConnectionString(databasePath));
         await connection.OpenAsync();
+        await SqliteSchema.ConfigureConnectionAsync(connection, 5000, CancellationToken.None);
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
@@ -423,6 +468,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     {
         await using SqliteConnection connection = new(CreateConnectionString(databasePath));
         await connection.OpenAsync();
+        await SqliteSchema.ConfigureConnectionAsync(connection, 5000, CancellationToken.None);
         return await ExecuteScalarInt64Async(connection, sql);
     }
 
@@ -438,6 +484,7 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     {
         await using SqliteConnection connection = new(CreateConnectionString(databasePath));
         await connection.OpenAsync();
+        await SqliteSchema.ConfigureConnectionAsync(connection, 5000, CancellationToken.None);
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         object? value = await command.ExecuteScalarAsync();

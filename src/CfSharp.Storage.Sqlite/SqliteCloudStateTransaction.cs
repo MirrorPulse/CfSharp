@@ -278,7 +278,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         {
             ArgumentNullException.ThrowIfNull(relativePath);
             return GetSingleAsync(
-                SelectColumns + " WHERE relative_path = $value COLLATE NOCASE;",
+                SelectColumns + " WHERE relative_path = $value COLLATE CFSHARP_UNICODE_NOCASE;",
                 relativePath,
                 cancellationToken);
         }
@@ -294,13 +294,13 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                     string condition = relativePath.Length == 0
                         ? string.Empty
                         : """
-                            WHERE relative_path = $path COLLATE NOCASE
-                              OR substr(relative_path, 1, length($primary_prefix)) = $primary_prefix COLLATE NOCASE
-                              OR substr(relative_path, 1, length($alternate_prefix)) = $alternate_prefix COLLATE NOCASE
+                            WHERE relative_path = $path COLLATE CFSHARP_UNICODE_NOCASE
+                              OR substr(relative_path, 1, length($primary_prefix)) = $primary_prefix COLLATE CFSHARP_UNICODE_NOCASE
+                              OR substr(relative_path, 1, length($alternate_prefix)) = $alternate_prefix COLLATE CFSHARP_UNICODE_NOCASE
                            """;
                     await using SqliteCommand command = _owner.CreateCommand(
                         SelectColumns + condition +
-                        " ORDER BY length(relative_path), relative_path COLLATE NOCASE, item_id;",
+                        " ORDER BY length(relative_path), relative_path COLLATE CFSHARP_UNICODE_NOCASE, item_id;",
                         token);
                     if (relativePath.Length != 0)
                     {

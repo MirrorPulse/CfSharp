@@ -398,15 +398,13 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     internal async ValueTask<CloudFileSystemOperationLease> AcquireOperationAsync(
         IEnumerable<CloudItemOperationScope> scopes,
         CancellationToken cancellationToken = default) =>
-        await AcquireOperationAsync(
+        await AcquireOperationCoreAsync(
                 scopes,
-                establishContext: false,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-    private async ValueTask<CloudFileSystemOperationLease> AcquireOperationAsync(
+    private async ValueTask<CloudFileSystemOperationLease> AcquireOperationCoreAsync(
         IEnumerable<CloudItemOperationScope> scopes,
-        bool establishContext,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scopes);
@@ -456,9 +454,7 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                 this,
                 stateStore,
                 pathLease,
-                requestedScopes,
-                establishContext ? _operationContext.Value : null,
-                establishContext);
+                requestedScopes);
         }
         catch
         {
@@ -630,27 +626,19 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
         private CloudFileSystem? _owner;
         private CloudItemOperationCoordinator.CloudItemOperationPathLease? _pathLease;
         private readonly IReadOnlyList<CloudItemOperationScope> _scopes;
-        private readonly CloudFileSystemOperationLease? _previousContext;
-        private readonly bool _establishesContext;
+        private CloudFileSystemOperationLease? _previousContext;
+        private int _establishesContext;
 
         internal CloudFileSystemOperationLease(
             CloudFileSystem owner,
             ICloudStateStore stateStore,
             CloudItemOperationCoordinator.CloudItemOperationPathLease? pathLease,
-            IReadOnlyList<CloudItemOperationScope> scopes,
-            CloudFileSystemOperationLease? previousContext = null,
-            bool establishesContext = false)
+            IReadOnlyList<CloudItemOperationScope> scopes)
         {
             _owner = owner;
             StateStore = stateStore;
             _pathLease = pathLease;
             _scopes = scopes;
-            _previousContext = previousContext;
-            _establishesContext = establishesContext;
-            if (establishesContext)
-            {
-                owner._operationContext.Value = this;
-            }
         }
 
         internal CloudFileSystem? Owner => _owner;
@@ -661,6 +649,26 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             _pathLease is not null && scopes.All(scope =>
                 _scopes.Any(outer => outer.Contains(scope)));
 
+        /// <summary>
+        /// Publishes this lease in the caller's execution context for nested operations.
+        /// </summary>
+        /// <remarks>
+        /// The assignment intentionally happens after the asynchronous acquisition has returned.
+        /// Assigning an <see cref="AsyncLocal{T}"/> from inside the acquisition method would write
+        /// to that method's copied execution context after a suspension and would not be visible to
+        /// the caller. This method is synchronous so the caller owns the context being updated.
+        /// </remarks>
+        internal void EstablishContext()
+        {
+            CloudFileSystem owner = _owner ??
+                throw new ObjectDisposedException(nameof(CloudFileSystemOperationLease));
+            if (Interlocked.CompareExchange(ref _establishesContext, 1, 0) == 0)
+            {
+                _previousContext = owner._operationContext.Value;
+                owner._operationContext.Value = this;
+            }
+        }
+
         public void Dispose()
         {
             CloudFileSystem? owner = Interlocked.Exchange(ref _owner, null);
@@ -669,7 +677,7 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
                 return;
             }
 
-            if (_establishesContext)
+            if (Volatile.Read(ref _establishesContext) != 0)
             {
                 owner._operationContext.Value = _previousContext;
             }

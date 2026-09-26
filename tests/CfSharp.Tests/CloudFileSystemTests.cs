@@ -276,6 +276,43 @@ public sealed class CloudFileSystemTests
         Assert.Equal(1, store.DisposeCalls);
     }
 
+    [Fact]
+    public async Task ContendedOperationPublishesNestedContextAfterAcquisitionReturns()
+    {
+        using TestDirectory root = new();
+        CloudFileSystem fileSystem = CloudFileSystem
+            .CreateBuilder(root.Path, new RecordingRuntime())
+            .WithStateStore(new RecordingStoreFactory())
+            .Build();
+        await fileSystem.StartAsync();
+
+        string childPath = Path.Combine(root.Path, "child.bin");
+        CloudFileSystem.CloudFileSystemOperationLease blocker =
+            await fileSystem.AcquireOperationAsync([CloudItemOperationScope.Exact(childPath)]);
+        Task<CloudFileSystem.CloudFileSystemOperationLease> pending = fileSystem.AcquireOperationAsync(
+            [CloudItemOperationScope.Subtree(root.Path)]).AsTask();
+        await Task.Delay(50);
+        Assert.False(pending.IsCompleted);
+
+        blocker.Dispose();
+        CloudFileSystem.CloudFileSystemOperationLease outer =
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            outer.EstablishContext();
+            using CloudFileSystem.CloudFileSystemOperationLease nested =
+                await fileSystem.AcquireOperationAsync(
+                    [CloudItemOperationScope.Exact(childPath)])
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            outer.Dispose();
+        }
+        await fileSystem.DisposeAsync();
+    }
+
     private static async Task WaitForStateAsync(
         CloudFileSystem fileSystem,
         CloudFileSystemLifecycleState expected)

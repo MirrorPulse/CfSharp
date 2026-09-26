@@ -43,6 +43,15 @@ public sealed partial class CloudFileSystem
         await _remoteApplyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Keep one admitted operation for the complete batch. This covers the head/tail
+            // journal transactions as well as every native entry mutation, so DisposeAsync cannot
+            // release the state store between entries. Establish the nested-operation context in
+            // this caller frame after the asynchronous acquisition has completed.
+            using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+                    [CloudItemOperationScope.Subtree(SyncRootPath)],
+                    cancellationToken)
+                .ConfigureAwait(false);
+            operation.EstablishContext();
             return await ApplyRemoteChangesCoreAsync(batch, options, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -199,9 +208,9 @@ public sealed partial class CloudFileSystem
         {
             using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
                     [CloudItemOperationScope.Subtree(SyncRootPath)],
-                    establishContext: true,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
+            operation.EstablishContext();
             return await ResolveRemoteConflictCoreAsync(conflictId, resolution, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -373,11 +382,6 @@ public sealed partial class CloudFileSystem
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
-        using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
-                [CloudItemOperationScope.Subtree(SyncRootPath)],
-                establishContext: true,
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
         RemoteEntryOutcome outcome = await ApplyRemoteEntryCoreAsync(change, options, cancellationToken)
             .ConfigureAwait(false);
         if (outcome.Conflict is null || options.ConflictResolver is null)

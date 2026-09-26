@@ -53,6 +53,8 @@ public sealed partial class CloudFileSystem
     /// <remarks>
     /// This view never calls a remote catalog and never applies a remote change. Callers first
     /// apply a remote batch explicitly, then use this method to inspect the durable/local result.
+    /// The complete local enumeration and durable read are admitted as one operation so disposal
+    /// cannot release the state store between the two phases.
     /// Online-only placeholders are represented as materialized entries; durable records whose
     /// local path is temporarily absent remain visible with <see cref="CloudSynchronizedDirectoryEntry.IsMaterialized"/>
     /// set to <see langword="false"/>.
@@ -64,6 +66,12 @@ public sealed partial class CloudFileSystem
         ArgumentNullException.ThrowIfNull(query);
         EnsureStarted();
         cancellationToken.ThrowIfCancellationRequested();
+
+        using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+                [CloudItemOperationScope.Subtree(SyncRootPath)],
+                cancellationToken)
+            .ConfigureAwait(false);
+        operation.EstablishContext();
 
         CloudDirectory directory = GetDirectory(query.RelativePath);
         CloudDirectoryEnumerationOptions options = CloudDirectoryEnumerationOptions

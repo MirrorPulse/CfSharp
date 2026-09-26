@@ -170,10 +170,7 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
     $nuspec = Get-ChildItem -LiteralPath $packageRoot -Filter *.nuspec -File -ErrorAction SilentlyContinue |
         Select-Object -First 1
     $licenseDeclared = "NOASSERTION"
-<<<<<<< HEAD
-=======
     $licenseSource = $null
->>>>>>> fa96fc8 (security(deps): add audit and provenance evidence)
     if ($null -ne $nuspec)
     {
         [xml]$nuspecDocument = Get-Content -LiteralPath $nuspec.FullName -Raw

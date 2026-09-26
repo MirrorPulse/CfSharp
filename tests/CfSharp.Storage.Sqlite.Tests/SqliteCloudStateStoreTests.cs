@@ -79,11 +79,35 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     [Fact]
     public async Task AbruptProcessExitPreservesOnlyDurableWritesAcrossWalRecovery()
     {
-        (int beforeExitCode, _) = await RunCrashHarnessAsync("before-commit");
-        Assert.NotEqual(0, beforeExitCode);
-        Assert.True(File.Exists(_databasePath + ".before-commit.started"));
+        int iterations = ReadCrashRecoveryIterations();
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            string databasePath = iteration == 0
+                ? _databasePath
+                : Path.Combine(
+                    _temporaryDirectory,
+                    $"round-{iteration:D3}",
+                    "state",
+                    "cfsharp.db");
+            string syncRootPath = iteration == 0
+                ? _syncRootPath
+                : Path.Combine(_temporaryDirectory, $"round-{iteration:D3}", "sync-root");
+            await VerifyCrashRecoveryRoundAsync(databasePath, syncRootPath);
+        }
+    }
 
-        await using (ICloudStateStore afterBeforeCommit = await CreateFactory().OpenAsync(CreateContext()))
+    private async Task VerifyCrashRecoveryRoundAsync(string databasePath, string syncRootPath)
+    {
+        Directory.CreateDirectory(syncRootPath);
+        (int beforeExitCode, _) = await RunCrashHarnessAsync(
+            "before-commit",
+            databasePath,
+            syncRootPath);
+        Assert.NotEqual(0, beforeExitCode);
+        Assert.True(File.Exists(databasePath + ".before-commit.started"));
+
+        await using (ICloudStateStore afterBeforeCommit = await new SqliteCloudStateStoreFactory(
+            databasePath).OpenAsync(new CloudStateStoreContext(syncRootPath)))
         await using (ICloudStateTransaction readBeforeCommit =
             await afterBeforeCommit.BeginTransactionAsync())
         {
@@ -91,18 +115,30 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
             await readBeforeCommit.RollbackAsync();
         }
 
-        (int afterExitCode, _) = await RunCrashHarnessAsync("after-commit");
+        (int afterExitCode, _) = await RunCrashHarnessAsync(
+            "after-commit",
+            databasePath,
+            syncRootPath);
         Assert.NotEqual(0, afterExitCode);
-        Assert.True(File.Exists(_databasePath + ".after-commit.started"));
+        Assert.True(File.Exists(databasePath + ".after-commit.started"));
 
-        await using ICloudStateStore afterCommit = await CreateFactory().OpenAsync(CreateContext());
+        await using ICloudStateStore afterCommit = await new SqliteCloudStateStoreFactory(
+            databasePath).OpenAsync(new CloudStateStoreContext(syncRootPath));
         await using ICloudStateTransaction readAfterCommit = await afterCommit.BeginTransactionAsync();
         CloudItemState? recovered = await readAfterCommit.Items.GetByRelativePathAsync("crash-recovery.txt");
         Assert.NotNull(recovered);
         Assert.Equal("revision-1", recovered.RemoteRevision);
         await readAfterCommit.RollbackAsync();
 
-        Assert.Equal("ok", await ExecuteScalarStringAsync(_databasePath, "PRAGMA integrity_check;"));
+        Assert.Equal("ok", await ExecuteScalarStringAsync(databasePath, "PRAGMA integrity_check;"));
+    }
+
+    private static int ReadCrashRecoveryIterations()
+    {
+        string? value = Environment.GetEnvironmentVariable("CFSHARP_CRASH_RECOVERY_ITERATIONS");
+        return int.TryParse(value, out int iterations) && iterations > 0
+            ? Math.Min(iterations, 100)
+            : 1;
     }
 
     [Fact]
@@ -588,7 +624,10 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<(int ExitCode, string Output)> RunCrashHarnessAsync(string mode)
+    private async Task<(int ExitCode, string Output)> RunCrashHarnessAsync(
+        string mode,
+        string? databasePath = null,
+        string? syncRootPath = null)
     {
         DirectoryInfo? root = new(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "CfSharp.sln")))
@@ -616,8 +655,8 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         };
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(harness);
-        startInfo.ArgumentList.Add(_databasePath);
-        startInfo.ArgumentList.Add(_syncRootPath);
+        startInfo.ArgumentList.Add(databasePath ?? _databasePath);
+        startInfo.ArgumentList.Add(syncRootPath ?? _syncRootPath);
         startInfo.ArgumentList.Add(mode);
 
         using Process process = new() { StartInfo = startInfo };

@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Soak duration in minutes'
+        required: false
+        default: '240'
+        type: string
 
 concurrency:
   group: cfsharp-ci-${{ github.workflow }}-${{ github.ref }}
@@ -199,4 +206,33 @@ jobs:
           path: |
             artifacts/abi-probe/x64.json
             tests/CfSharp.Native.Tests/TestResults/**
+          if-no-files-found: error
+
+  long-soak:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-2022
+    timeout-minutes: 300
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore CfSharp.sln
+
+      - name: Run bounded soak
+        shell: pwsh
+        run: ./eng/run-soak.ps1 -DurationMinutes ([int]'${{ inputs.duration_minutes }}')
+
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: long-soak-evidence
+          path: artifacts/soak/**
           if-no-files-found: error

@@ -1,312 +1,51 @@
 # CfSharp
 
-CfSharp is a Windows-only .NET library for the Windows Cloud Files API (`cfapi.h` and `CldApi.dll`).
+[![CI](https://github.com/MirrorPulse/CfSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/MirrorPulse/CfSharp/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-84f5d3.svg)](LICENSE)
+[![Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)](docs/platform-support.md)
 
-The project currently contains three packages:
+CfSharp is a Windows-only .NET library for building Cloud Files sync providers with a safe,
+idiomatic C# API. It keeps the complete Windows Cloud Files surface reachable while taking care
+of native structure layout, callback lifetime, cancellation, durable coordination, and failure
+translation.
 
-- `CfSharp.Native` provides complete, ABI-accurate native bindings.
-- `CfSharp` provides a safe, idiomatic file-system API for sync providers.
-- `CfSharp.Storage.Sqlite` provides the optional official durable-state implementation.
+> **Development preview:** CfSharp is under active development. Packages have not been released
+> to NuGet yet. Build from source while the first preview is being prepared.
 
-The high-level package defines `ICloudStateStoreFactory`, `ICloudStateStore`, and
-`ICloudStateTransaction` so custom backends can participate without taking a SQLite dependency.
-Transactions expose focused repositories for item mappings, checkpoints, local operations,
-conflicts, remote-batch progress, and echo suppression. Disposal without commit rolls back.
+## What is included
 
-The SQLite provider requires an explicit absolute database path outside the managed sync root:
+| Package | Purpose |
+| --- | --- |
+| `CfSharp.Native` | ABI-accurate bindings for `cfapi.h` and `CldApi.dll`. |
+| `CfSharp` | High-level sync-root, placeholder, hydration, provider, local-change, and remote-change APIs. |
+| `CfSharp.Storage.Sqlite` | Optional transactional state store using a caller-owned SQLite database. |
 
-```csharp
-ICloudStateStoreFactory stateStoreFactory = new SqliteCloudStateStoreFactory(
-    @"C:\ProgramData\ExampleProvider\Accounts\account-42\cfsharp.db");
+The dependency direction is one way: `CfSharp.Native` is the interop layer, `CfSharp` provides
+the safe domain API, and the SQLite package depends on `CfSharp`. Remote transport, authentication,
+content bytes, and business conflict policy remain application-owned.
 
-CloudStateStoreContext context = new(@"C:\Users\Example\Example Cloud");
-await using ICloudStateStore store = await stateStoreFactory.OpenAsync(context);
+## Quick start
+
+### Requirements
+
+- Windows 10 version 1709 (build 16299) or later for the core Cloud Files API;
+- .NET 10 SDK selected by [`global.json`](global.json);
+- x64 or ARM64 for the current support target. x86 is outside the stable release matrix;
+- a sync root directory and a durable state database located outside that sync root.
+
+### Build from source
+
+```powershell
+git clone https://github.com/MirrorPulse/CfSharp.git
+cd CfSharp
+dotnet restore CfSharp.sln
+dotnet build CfSharp.sln --configuration Release --no-restore
+dotnet test CfSharp.sln --configuration Release --no-build
 ```
 
-One database is bound to one sync root and has one active CfSharp owner. The provider uses
-transactions, foreign keys, WAL mode, and a bounded lock wait. Applications may replace it with
-any implementation of the core state interfaces that satisfies the same transactional contract.
-The state database stores synchronization coordination metadata, never file content or secrets.
-
-## Goals
-
-- Preserve access to every native CFAPI capability.
-- Provide an elegant high-level API for files, directories, placeholders, hydration, population, and synchronization state.
-- Distinguish Windows demand requests, durable local changes, and application-supplied remote changes.
-- Make ownership, cancellation, partial failure, platform requirements, and native errors explicit.
-- Maintain detailed public documentation and verifiable ABI compatibility.
-
-## Status
-
-CfSharp is under active development. Platform discovery, persistent sync-root lifecycle, native
-callback, placeholder creation, transfer primitives, the managed demand provider, the local
-change feed, and application-owned remote change application are implemented. The transactional
-state contracts and official SQLite provider are implemented. The complete product sample and
-release packaging remain future phases. No production package has been released.
-
-## Sync Root Lifecycle
-
-```csharp
-SyncRootRegistrationOptions registration =
-    SyncRootRegistrationOptions.CreateBuilder("Example Cloud", "1.0.0")
-        .WithProviderId(providerId)
-        .WithSyncRootIdentity(accountIdentity)
-        .WithHydrationPolicy(
-            CloudHydrationPolicy.Progressive,
-            CloudHydrationPolicyModifiers.AutoDehydrationAllowed)
-        .WithPopulationPolicy(CloudPopulationPolicy.Partial)
-        .WithRootMarkedInSync()
-        .Build();
-
-CloudSyncRoot root = CloudSyncRoot.Register(localDirectory, registration);
-CloudSyncRootInfo current = root.GetInfo();
-```
-
-Registration is persistent and does not end when the process exits. `Unregister()` is an
-explicit account-removal or uninstall operation: Windows traverses the tree and may delete
-placeholder content that is not locally complete. It must not be used as routine session cleanup.
-
-## Cloud File-System Lifecycle
-
-`CloudFileSystem` is the normal process-scoped facade. Building validates and freezes its
-configuration without acquiring resources. Starting opens the configured durable store, applies
-or verifies persistent registration, and connects the optional content provider:
-
-```csharp
-await using CloudFileSystem fileSystem = CloudFileSystem.CreateBuilder(localDirectory)
-    .WithStateStore(
-        new SqliteCloudStateStoreFactory(
-            @"C:\ProgramData\ExampleProvider\Accounts\account-42\cfsharp.db"))
-    .WithRegistration(registration)
-    .WithContentProvider(contentProvider)
-    .Build();
-
-await fileSystem.StartAsync(cancellationToken);
-
-CloudFile report = fileSystem.GetFile(@"Documents\report.pdf");
-CloudItemSnapshot current = await report.InspectAsync(cancellationToken);
-```
-
-Item work admitted by a started facade holds an explicit operation lease. Conflicting path scopes
-are serialized while non-overlapping paths may proceed concurrently. Disposal rejects new work,
-waits for admitted operations to finish, stops the provider session, and then closes durable state.
-It intentionally leaves the persistent sync-root registration installed. Use
-`CloudSyncRoot.Unregister()` only for explicit account removal or uninstall.
-
-`CloudFile`, `CloudDirectory`, and the root directory are immutable path references. They keep no
-native handle and cache no mutable attributes. Every `InspectAsync()` call returns a fresh,
-immutable snapshot combining current local metadata, independent Cloud Files placeholder flags,
-content availability, pin and in-sync state, opaque placeholder identity, and any matching durable
-item mapping. A missing local item is represented by `Exists == false`, allowing a durable
-tombstone to remain visible without inventing file-system state.
-
-Local tree navigation is explicit and side-effect free:
-
-```csharp
-CloudDirectory documents = fileSystem.Root.GetDirectory("Documents");
-CloudItem existing = documents.Resolve("report.pdf");
-
-CloudDirectoryEnumerationOptions textFiles = CloudDirectoryEnumerationOptions
-    .CreateBuilder()
-    .WithSearchPattern("*.txt")
-    .WithEntryKinds(CloudDirectoryEntryKinds.Files)
-    .WithOrder(CloudDirectoryEnumerationOrder.NameAscending)
-    .WithRecursion()
-    .Build();
-
-await foreach (CloudItem item in documents.EnumerateLocalChildrenAsync(textFiles, cancellationToken))
-{
-    // Each result is an immutable path reference; inspect it for fresh state.
-}
-```
-
-Local enumeration never calls the remote content provider or changes the namespace. Recursion is
-opt-in, streams results breadth-first, and never follows directory reparse points. Existing links
-that resolve outside the sync root are rejected rather than traversed.
-
-## Placeholder Operation Models
-
-Placeholder operations use immutable, kind-specific specifications rather than native structures
-or flags. A specification owns a stable CfSharp item identity, provider remote identity and
-revision, metadata, collision behavior, and requested initial state:
-
-```csharp
-CloudFilePlaceholderSpec report = CloudFilePlaceholderSpec
-    .CreateBuilder("report.pdf", "remote-report-42", length: 128_000)
-    .WithRemoteRevision("etag-7")
-    .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly)
-    .Build();
-```
-
-`CloudPlaceholderIdentity` uses a deterministic, versioned envelope suitable for the native
-Cloud Files identity blob. It can be encoded or decoded without native resources and is limited to
-the platform's 4 KiB maximum. Remote identifiers and revisions must never contain credentials or
-secrets. `CloudFileRange`, conversion options, explicit placeholder patches, and batch/recursive
-result values preserve validation and partial-failure information without exposing native unions.
-
-Create direct children in one validated batch. Results remain in input order and preserve native
-batch failures, per-entry failures, and completed post-creation steps independently:
-
-```csharp
-CloudPlaceholderBatchResult result = await fileSystem.Root.CreatePlaceholdersAsync(
-    [report, CloudDirectoryPlaceholderSpec.CreateBuilder("Archive", "archive-42").Build()]);
-
-result.ThrowIfAnyFailed();
-```
-
-Successful namespace entries are committed to the configured state store in one transaction.
-Retrying the same path and encoded identity is idempotent. An unrelated existing item remains a
-conflict unless its specification explicitly requests supersede.
-
-Existing items expose explicit conversion, patch, and reversion operations. Patches distinguish
-unchanged, replacement, and removal semantics and can condition an update on the observed USN:
-
-```csharp
-CloudPlaceholderMutationResult updated = await file.UpdatePlaceholderAsync(
-    CloudPlaceholderPatch.CreateBuilder()
-        .WithIdentity(newIdentity)
-        .WithInSyncVerification()
-        .WithExpectedUsn(observedUsn)
-        .Build());
-```
-
-Mutation results contain a fresh post-operation snapshot and never retain native handles.
-
-Pin intent, synchronization state, and physical content remain independently controllable. The
-three availability targets are convenience transitions with explicit partial-failure reporting:
-
-```csharp
-CloudAvailabilityChangeResult local = await file.SetAvailabilityAsync(
-    CloudAvailabilityTarget.LocallyAvailable,
-    cancellationToken);
-
-await file.SetInSyncAsync(inSync: true, cancellationToken: cancellationToken);
-await file.DehydrateAsync(new CloudFileRange(0, 64 * 1024), cancellationToken: cancellationToken);
-
-IReadOnlyList<CloudFileRange> onDisk = await file.GetRangesAsync(
-    CloudPlaceholderRangeKind.OnDisk,
-    CloudFileRange.WholeFile,
-    cancellationToken);
-```
-
-`OnlineOnly` unpins and then dehydrates the complete file. `LocallyAvailable` and
-`AlwaysAvailable` hydrate first, then apply their final unpinned or pinned intent so a pin-triggered
-provider request cannot race the explicit hydration. Windows may still be completing an earlier
-asynchronous pin notification; in that narrow case CfSharp uses a bounded, cancellation-aware
-retry for `ERROR_CLOUD_FILE_UNSUCCESSFUL`. Other native failures are not retried. If either native step fails,
-`CloudAvailabilityTransitionException` preserves the original `CloudFilesException`, completed
-steps, and a fresh post-failure snapshot. Range results are normalized, ordered, immutable, and
-kept separate for on-disk, provider-validated, and locally modified content.
-
-Moves keep path references immutable and update durable directory descendants together after the
-file-system move succeeds:
-
-```csharp
-CloudItemMoveResult moved = await file.MoveToAsync(
-    archiveDirectory,
-    "report-final.pdf",
-    cancellationToken: cancellationToken);
-
-CloudFile movedFile = (CloudFile)moved.Item;
-CloudItemDeleteResult deleted = await movedFile.DeleteAsync(cancellationToken);
-```
-
-The original `file` reference remains bound to its old path. Deleting a tracked item commits a
-durable tombstone so a later local-change pipeline can publish the deletion. Because Windows and
-the configured state store cannot share one physical transaction, a store failure after a move or
-delete becomes `CloudItemCoordinationException`; its paths identify the namespace work that already
-completed.
-
-## Local Change Feed
-
-After startup, an application may create one explicit local-change feed for the sync root:
-
-```csharp
-CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
-await feed.StartAsync(cancellationToken);
-
-CloudLocalChangeBatch batch = await feed.ReadBatchAsync(cancellationToken);
-if (batch.RequiresFullRescan)
-{
-    await ReconcileEntireSyncRootAsync(fileSystem, cancellationToken);
-    await feed.AcknowledgeFullRescanAsync(cancellationToken);
-}
-else
-{
-    await UploadLocalChangesAsync(batch.Changes, cancellationToken);
-    await feed.AcknowledgeAsync(
-        batch.Changes.Select(change => change.OperationId),
-        cancellationToken);
-}
-```
-
-The feed uses the Windows `ReadDirectoryChangesW`-backed watcher, copies notifications into a
-bounded managed queue, normalizes paths relative to the sync root, pairs renames, and commits
-the ordered operation journal and watcher checkpoint in one state-store transaction. Provider
-writes can be protected with `SuppressProviderEchoAsync`; hydration, pinning, and availability
-transitions are not upload operations by themselves. A buffer overflow or watcher error is
-explicitly reported as `RequiresFullRescan`. Applications must perform periodic full
-reconciliation and must not treat the notification stream as a lossless replacement for it.
-
-Recursive operations are always explicit and operate only on the currently materialized local
-tree. They return deterministic per-entry success, failure, or not-processed results:
-
-```csharp
-CloudRecursiveOperationResult result = await folder.DeleteTreeAsync(
-    new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: false),
-    cancellationToken);
-
-result.ThrowIfAnyFailed();
-```
-
-Recursive state changes visit parents before children; recursive deletion visits children before
-parents. Symbolic links and junctions are never traversed. State operations omit link entries,
-while deletion removes only the link itself and leaves its target untouched. These methods do not
-enumerate remote children or substitute for provider `FETCH_PLACEHOLDERS` callbacks.
-
-## Remote Change Application
-
-Remote transport, authentication, cursors, content bytes, and business conflict policy remain
-application-owned. CfSharp applies an immutable remote batch to the local namespace, records
-durable progress and conflicts, suppresses provider-generated local echoes, and advances the
-opaque cursor only after each entry result is committed:
-
-```csharp
-CloudRemoteChangeBatch remoteBatch = new(
-    "provider-batch-42",
-    initialCursor,
-    changes,
-    finalCursor);
-
-CloudRemoteApplyResult applied = await fileSystem.ApplyRemoteChangesAsync(
-    remoteBatch,
-    new CloudRemoteApplyOptions { ConflictResolver = conflictResolver },
-    cancellationToken);
-
-if (applied.RequiresRetry)
-{
-    // Re-submit the same immutable batch; durable progress resumes at the safe cursor.
-}
-
-foreach (Guid conflictId in applied.ConflictIds)
-{
-    CloudRemoteApplyEntryResult resolved = await fileSystem.ResolveRemoteConflictAsync(
-        conflictId,
-        new CloudRemoteConflictResolution(CloudRemoteConflictDecision.Defer),
-        cancellationToken);
-}
-```
-
-`CloudRemoteDirectoryQuery` and `ICloudRemoteDirectoryCatalog` provide a paged remote metadata
-view without creating local placeholders. `ReadSynchronizedDirectoryPageAsync` is a separate,
-side-effect-free view over materialized children and durable item state after an explicit remote
-batch. Neither view performs hidden network access or substitutes for demand callbacks. Remote
-file upserts carry length and metadata only; a configured content provider hydrates bytes later.
-
-## Sample Provider
-
-The sample mirrors files from a local content directory into a registered sync root as
-online-only placeholders, then verifies hydration through ordinary file reads:
+The first sample provider is available under
+[`samples/CfSharp.SampleProvider`](samples/CfSharp.SampleProvider). It mirrors a local content
+directory as online-only placeholders:
 
 ```powershell
 dotnet run --project samples/CfSharp.SampleProvider -- `
@@ -316,32 +55,70 @@ dotnet run --project samples/CfSharp.SampleProvider -- `
   --once
 ```
 
-The sample closes its process-scoped provider session before exiting but intentionally leaves the
-persistent registration installed. Remove it explicitly only when removing that sample account.
+## A small example
 
-## Platform
+CfSharp makes ownership and lifecycle boundaries explicit. The SQLite path is supplied by the
+application and must not be placed inside the managed sync root.
 
-CfSharp targets Windows and is intended for desktop sync-provider applications.
+```csharp
+ICloudStateStoreFactory stateStoreFactory = new SqliteCloudStateStoreFactory(
+    @"C:\ProgramData\ExampleProvider\Accounts\account-42\cfsharp.db");
 
-## Development
+SyncRootRegistrationOptions registration =
+    SyncRootRegistrationOptions.CreateBuilder("Example Cloud", "1.0.0")
+        .WithProviderId(providerId)
+        .WithSyncRootIdentity(accountIdentity)
+        .WithRootMarkedInSync()
+        .Build();
 
-The repository currently uses the .NET SDK selected by `global.json`.
+await using CloudFileSystem fileSystem = CloudFileSystem.CreateBuilder(
+        @"C:\Users\Example\Example Cloud")
+    .WithStateStore(stateStoreFactory)
+    .WithRegistration(registration)
+    .WithContentProvider(contentProvider)
+    .Build();
 
-```powershell
-dotnet restore CfSharp.sln
-dotnet build CfSharp.sln --configuration Release --no-restore
-dotnet test CfSharp.sln --configuration Release --no-build
-dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build
-dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build
-dotnet pack src/CfSharp.Storage.Sqlite/CfSharp.Storage.Sqlite.csproj --configuration Release --no-build
+await fileSystem.StartAsync(cancellationToken);
+CloudFile report = fileSystem.GetFile(@"Documents\report.pdf");
+CloudItemSnapshot snapshot = await report.InspectAsync(cancellationToken);
 ```
 
-The native ABI probe under `tests/CfSharp.Native.AbiProbe` additionally requires the Microsoft Visual C++ Build Tools.
+`CloudFileSystem` opens the configured store only after validating the sync root and owns it after
+a successful start. Disposing the facade stops process-scoped work and closes durable state, but
+does not unregister the persistent Windows sync-root registration. Call
+`CloudSyncRoot.Unregister()` only for explicit account removal or uninstall.
 
-## Author
+## Documentation
 
-MirrorPulse Team
+- [Documentation home](docs/index.md)
+- [Getting started](docs/getting-started.md)
+- [Architecture and ownership](docs/architecture.md)
+- [Sync-root lifecycle](docs/sync-root-lifecycle.md)
+- [Placeholders and hydration](docs/placeholders.md)
+- [Local change feed](docs/local-change-feed.md)
+- [Remote change application](docs/remote-change-application.md)
+- [SQLite state](docs/state-store-sqlite.md)
+- [Platform support](docs/platform-support.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
+The generated API reference will be published with the documentation site at
+`https://mirrorpulse.github.io/cfsharp/` when the first preview documentation pipeline is enabled.
+
+## Development notes
+
+The repository is Windows-first and keeps unsafe interop isolated in `CfSharp.Native`. Public APIs
+document ownership, lifetime, thread-safety, platform requirements, failure modes, and relevant
+native behavior. Changes should follow the atomic-commit and verification rules in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+```powershell
+dotnet format CfSharp.sln --verify-no-changes --no-restore
+dotnet build CfSharp.sln --configuration Release --no-restore
+dotnet test CfSharp.sln --configuration Release --no-build
+pwsh ./eng/verify-platform-matrix.ps1
+pwsh ./eng/verify-runtime-boundaries.ps1 -Configuration Release
+```
 
 ## License
 
-CfSharp is licensed under the [Apache License 2.0](LICENSE).
+CfSharp is licensed under the [Apache License 2.0](LICENSE). Copyright © MirrorPulse Team.

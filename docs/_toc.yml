@@ -1,0 +1,30 @@
+- name: Documentation home
+  href: index.md
+- name: Guides
+  items:
+    - name: Getting started
+      href: getting-started.md
+    - name: Installation and prerequisites
+      href: installation.md
+    - name: Architecture and ownership
+      href: architecture.md
+    - name: Sync-root lifecycle
+      href: sync-root-lifecycle.md
+    - name: Placeholders and hydration
+      href: placeholders.md
+    - name: Local change feed
+      href: local-change-feed.md
+    - name: Remote change application
+      href: remote-change-application.md
+    - name: SQLite state store
+      href: state-store-sqlite.md
+    - name: CfSharp Sample
+      href: sample-provider.md
+    - name: Platform support
+      href: platform-support.md
+    - name: Troubleshooting
+      href: troubleshooting.md
+    - name: Contributing
+      href: contributing.md
+- name: API reference
+  href: api/index.md

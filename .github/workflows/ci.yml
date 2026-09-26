@@ -214,7 +214,16 @@ jobs:
 
   long-soak:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: windows-2022
+    name: long-soak-${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2022
+          - architecture: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
 
     steps:
@@ -237,6 +246,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: long-soak-evidence
+          name: long-soak-evidence-${{ matrix.architecture }}
           path: artifacts/soak/**
           if-no-files-found: error

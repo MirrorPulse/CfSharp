@@ -51,7 +51,7 @@ internal static unsafe class NativeSyncRoot
             fixed (char* pathPointer = path)
             fixed (byte* bufferPointer = buffer)
             {
-                uint returnedLength;
+                uint returnedLength = 0;
                 int result = CfApi.CfGetSyncRootInfoByPath(
                     pathPointer,
                     CfSyncRootInfoClass.Standard,

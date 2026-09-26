@@ -24,7 +24,7 @@
     "routes": {
       "CfGetPlaceholderRangeInfoForHydration": {
         "route": "NativeOnlyDocumented",
-        "minimumWindowsVersion": "10.0.16299",
+        "minimumWindowsVersion": "10.0.17134",
         "minimumIntegrationNumber": 1536,
         "reason": "Requires callback or provider-owned connection/transfer/file identifiers; no safe standalone high-level lease contract.",
         "nativeDocumentation": "draft/docs/sdk-api/nf-cfapi-cfgetplaceholderrangeinfoforhydration.md"

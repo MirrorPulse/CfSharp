@@ -131,7 +131,7 @@ public sealed class NativeCoverageInventoryTests
             .GetProperty("routeMetadata")
             .GetProperty("routes")
             .GetProperty("CfGetPlaceholderRangeInfoForHydration");
-        Assert.Equal("10.0.16299", hydrationRoute.GetProperty("minimumWindowsVersion").GetString());
+        Assert.Equal("10.0.17134", hydrationRoute.GetProperty("minimumWindowsVersion").GetString());
         Assert.Equal(1536u, hydrationRoute.GetProperty("minimumIntegrationNumber").GetUInt32());
     }
 

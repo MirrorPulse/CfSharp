@@ -813,7 +813,7 @@ public static partial class CfApi
     /// </remarks>
     [LibraryImport("CldApi.dll", EntryPoint = nameof(CfGetPlaceholderRangeInfoForHydration))]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvStdcall) })]
-    [SupportedOSPlatform("windows10.0.16299")]
+    [SupportedOSPlatform("windows10.0.17134")]
     [SuppressMessage(
         "Interoperability",
         "CA1401:P/Invokes should not be visible",

@@ -2,6 +2,7 @@ internal enum SampleCommand
 {
     Register,
     Run,
+    Enumerate,
     Unregister,
 }
 
@@ -33,6 +34,9 @@ internal sealed record SampleArguments(
             case "unregister" when args.Length == 2:
                 parsed = new SampleArguments(SampleCommand.Unregister, args[1], null, null, true);
                 return true;
+            case "enumerate" when args.Length == 2:
+                parsed = new SampleArguments(SampleCommand.Enumerate, args[1], null, null, true);
+                return true;
             case "run":
                 return TryParseRun(args, out parsed, out error);
             default:
@@ -45,6 +49,7 @@ internal sealed record SampleArguments(
         Usage:
           CfSharp.SampleProvider register <sync-root-directory>
           CfSharp.SampleProvider run <content-directory> <sync-root-directory> --state-db <database-path> [--once]
+          CfSharp.SampleProvider enumerate <sync-root-directory>
           CfSharp.SampleProvider unregister <sync-root-directory>
         """;
 

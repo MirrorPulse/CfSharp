@@ -63,6 +63,13 @@ public sealed class SamplePathSafetyTests
                 out SampleArguments? unregister,
                 out _));
         Assert.Equal(SampleCommand.Unregister, unregister!.Command);
+
+        Assert.True(
+            SampleArguments.TryParse(
+                ["enumerate", "root"],
+                out SampleArguments? enumerate,
+                out _));
+        Assert.Equal(SampleCommand.Enumerate, enumerate!.Command);
     }
 
     [Fact]
@@ -114,6 +121,20 @@ public sealed class SamplePathSafetyTests
 
         Assert.Equal(@"C:\Sample\content", startInfo.ArgumentList[^2]);
         Assert.Equal(@"C:\Sample\sync-root", startInfo.ArgumentList[^1]);
+    }
+
+    [Fact]
+    public void EnumerationConsumerUsesDirectProcessArguments()
+    {
+        ProcessStartInfo startInfo = global::SampleProvider.CreateEnumerationProcessStartInfo(
+            @"C:\CfSharpAcceptance\sync-root");
+
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Contains("enumerate", startInfo.ArgumentList, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(@"C:\CfSharpAcceptance\sync-root", startInfo.ArgumentList[^1]);
+        Assert.DoesNotContain("/c", startInfo.ArgumentList, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

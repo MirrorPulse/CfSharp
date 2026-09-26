@@ -43,6 +43,7 @@ internal static class SampleProvider
             {
                 SampleCommand.Register => await RegisterAsync(selectedOptions.SyncRootPath),
                 SampleCommand.Unregister => Unregister(selectedOptions.SyncRootPath),
+                SampleCommand.Enumerate => Enumerate(selectedOptions.SyncRootPath),
                 SampleCommand.Run => await RunProviderAsync(selectedOptions),
                 _ => throw new InvalidOperationException("The sample command is not supported."),
             };
@@ -133,6 +134,22 @@ internal static class SampleProvider
         exception.Operation == "CloudSyncRoot.GetInfo" &&
         exception.HResult == CloudRootNotRegisteredHResult;
 
+    private static int Enumerate(string requestedSyncRootPath)
+    {
+        string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
+            requestedSyncRootPath,
+            "sync-root");
+        foreach (string path in Directory.EnumerateFiles(
+                     syncRootPath,
+                     "*",
+                     SearchOption.AllDirectories))
+        {
+            Console.WriteLine(path);
+        }
+
+        return 0;
+    }
+
     [SupportedOSPlatform("windows10.0.16299")]
     private static async Task<int> RunProviderAsync(SampleArguments options)
     {
@@ -189,11 +206,29 @@ internal static class SampleProvider
         string contentRoot,
         CancellationToken cancellationToken)
     {
-        // Enumerate in-process. Passing a provider-controlled path through cmd.exe would let
-        // metacharacters in a file name become shell syntax.
-        string[] placeholderFiles = Directory
-            .EnumerateFiles(syncRootPath, "*", SearchOption.AllDirectories)
+        // Use a separate, controlled consumer process for the first enumeration. This is
+        // important because Windows does not always issue FETCH_PLACEHOLDERS for an enumeration
+        // initiated by the provider process itself. The consumer receives arguments directly and
+        // never routes paths through cmd.exe.
+        ProcessStartInfo enumerationStartInfo = CreateEnumerationProcessStartInfo(syncRootPath);
+        using Process enumerationProcess = Process.Start(enumerationStartInfo) ??
+            throw new InvalidOperationException("The external sync-root enumeration could not start.");
+        Task<string> outputTask = enumerationProcess.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        Task<string> errorTask = enumerationProcess.StandardError.ReadToEndAsync(CancellationToken.None);
+        await enumerationProcess.WaitForExitAsync(cancellationToken);
+        string output = await outputTask;
+        string error = await errorTask;
+        if (enumerationProcess.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"The external sync-root enumeration failed with exit code " +
+                $"{enumerationProcess.ExitCode}: {error}");
+        }
+
+        string[] placeholderFiles = output
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
             .Select(path => SamplePathSafety.ResolveSyncRootCallbackPath(syncRootPath, path))
+            .Where(File.Exists)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (placeholderFiles.Length == 0)
@@ -234,6 +269,31 @@ internal static class SampleProvider
         await Task.WhenAll(externalReads);
         Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
         Console.WriteLine($"Concurrent external hydrations verified: {externalReads.Count}");
+    }
+
+    internal static ProcessStartInfo CreateEnumerationProcessStartInfo(string syncRootPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(syncRootPath);
+        string processPath = Environment.ProcessPath ??
+            throw new InvalidOperationException("The sample process path is unavailable.");
+        string[] commandLine = Environment.GetCommandLineArgs();
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = processPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        if (Path.GetExtension(processPath).Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add(commandLine[0]);
+        }
+
+        startInfo.ArgumentList.Add("enumerate");
+        startInfo.ArgumentList.Add(syncRootPath);
+        return startInfo;
     }
 
     internal static async Task VerifyExternalContentAsync(

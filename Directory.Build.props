@@ -26,4 +26,9 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <RestoreLockedMode>true</RestoreLockedMode>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.DotNet.ILCompiler" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" PrivateAssets="all" />
+  </ItemGroup>
 </Project>

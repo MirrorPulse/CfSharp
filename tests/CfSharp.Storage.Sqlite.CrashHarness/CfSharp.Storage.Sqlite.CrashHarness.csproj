@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CfSharp.Storage.Sqlite\CfSharp.Storage.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\CfSharp\CfSharp.csproj" />
+  </ItemGroup>
+</Project>

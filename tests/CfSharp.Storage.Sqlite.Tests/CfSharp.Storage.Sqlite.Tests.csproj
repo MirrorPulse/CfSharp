@@ -18,6 +18,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CfSharp.Storage.Sqlite\CfSharp.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\CfSharp\CfSharp.csproj" />
+    <ProjectReference Include="..\CfSharp.Storage.Sqlite.CrashHarness\CfSharp.Storage.Sqlite.CrashHarness.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 using CfSharp.Tests.Persistence;
@@ -73,6 +74,35 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
 
         Assert.Equal(1, completionCalls);
         await transaction.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task AbruptProcessExitPreservesOnlyDurableWritesAcrossWalRecovery()
+    {
+        (int beforeExitCode, _) = await RunCrashHarnessAsync("before-commit");
+        Assert.NotEqual(0, beforeExitCode);
+        Assert.True(File.Exists(_databasePath + ".before-commit.started"));
+
+        await using (ICloudStateStore afterBeforeCommit = await CreateFactory().OpenAsync(CreateContext()))
+        await using (ICloudStateTransaction readBeforeCommit =
+            await afterBeforeCommit.BeginTransactionAsync())
+        {
+            Assert.Null(await readBeforeCommit.Items.GetByRelativePathAsync("crash-recovery.txt"));
+            await readBeforeCommit.RollbackAsync();
+        }
+
+        (int afterExitCode, _) = await RunCrashHarnessAsync("after-commit");
+        Assert.NotEqual(0, afterExitCode);
+        Assert.True(File.Exists(_databasePath + ".after-commit.started"));
+
+        await using ICloudStateStore afterCommit = await CreateFactory().OpenAsync(CreateContext());
+        await using ICloudStateTransaction readAfterCommit = await afterCommit.BeginTransactionAsync();
+        CloudItemState? recovered = await readAfterCommit.Items.GetByRelativePathAsync("crash-recovery.txt");
+        Assert.NotNull(recovered);
+        Assert.Equal("revision-1", recovered.RemoteRevision);
+        await readAfterCommit.RollbackAsync();
+
+        Assert.Equal("ok", await ExecuteScalarStringAsync(_databasePath, "PRAGMA integrity_check;"));
     }
 
     [Fact]
@@ -556,6 +586,47 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<(int ExitCode, string Output)> RunCrashHarnessAsync(string mode)
+    {
+        DirectoryInfo? root = new(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "CfSharp.sln")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        string harness = Path.Combine(
+            root!.FullName,
+            "tests",
+            "CfSharp.Storage.Sqlite.CrashHarness",
+            "bin",
+            "Release",
+            "net10.0-windows",
+            "CfSharp.Storage.Sqlite.CrashHarness.dll");
+        Assert.True(File.Exists(harness), $"Crash harness was not built: {harness}");
+
+        ProcessStartInfo startInfo = new("dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(harness);
+        startInfo.ArgumentList.Add(_databasePath);
+        startInfo.ArgumentList.Add(_syncRootPath);
+        startInfo.ArgumentList.Add(mode);
+
+        using Process process = new() { StartInfo = startInfo };
+        Assert.True(process.Start());
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(30));
+        await process.WaitForExitAsync(timeout.Token);
+        string output = await process.StandardOutput.ReadToEndAsync() +
+            await process.StandardError.ReadToEndAsync();
+        return (process.ExitCode, output);
     }
 
     private static async Task<long> ExecuteScalarInt64Async(string databasePath, string sql)

@@ -284,6 +284,57 @@ public abstract class CloudStateStoreContractTests
     }
 
     [Fact]
+    public async Task ItemScopedJournalQueryFindsEntriesBeyondGlobalPageLimit()
+    {
+        ICloudStateStoreFactory factory = CreateFactory();
+        await using ICloudStateStore store = await factory.OpenAsync(CreateContext());
+        Guid targetItemId = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
+        {
+            await write.Items.UpsertAsync(
+                new CloudItemState(
+                    targetItemId,
+                    "target",
+                    "target.txt",
+                    CloudItemKind.File,
+                    null,
+                    null,
+                    false,
+                    now));
+            for (int index = 0; index < 4096; index++)
+            {
+                await write.Operations.EnqueueAsync(
+                    new CloudOperationJournalEntry(
+                        Guid.NewGuid(),
+                        CloudStateOperationKind.ContentUpdate,
+                        null,
+                        [1],
+                        now.AddTicks(index)));
+            }
+
+            Guid targetOperationId = Guid.NewGuid();
+            await write.Operations.EnqueueAsync(
+                new CloudOperationJournalEntry(
+                    targetOperationId,
+                    CloudStateOperationKind.ContentUpdate,
+                    targetItemId,
+                    [2],
+                    now.AddTicks(4096)));
+            await write.CommitAsync();
+        }
+
+        await using ICloudStateTransaction read = await store.BeginTransactionAsync();
+        IReadOnlyList<CloudOperationJournalEntry> targetOperations =
+            await read.Operations.ListByItemIdAsync(targetItemId, int.MaxValue);
+        CloudOperationJournalEntry target = Assert.Single(targetOperations);
+        Assert.Equal(targetItemId, target.ItemId);
+        Assert.Equal(new byte[] { 2 }, target.Payload.ToArray());
+        await read.RollbackAsync();
+    }
+
+    [Fact]
     public async Task ExpiredEchoSuppressionsCanBeRemoved()
     {
         ICloudStateStoreFactory factory = CreateFactory();

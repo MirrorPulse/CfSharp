@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace CfSharp.Tests;
@@ -43,13 +44,13 @@ public sealed class CloudDiagnosticsTests
     [Fact]
     public void ProviderFailureDiagnosticsCaptureOpaqueKeysAndErrorDetails()
     {
-        List<Activity> stopped = [];
+        ConcurrentQueue<Activity> stopped = new();
         using ActivityListener listener = new()
         {
             ShouldListenTo = source => source.Name == CloudDiagnostics.ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllData,
-            ActivityStopped = stopped.Add,
+            ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -61,7 +62,11 @@ public sealed class CloudDiagnosticsTests
             requestKey: 3,
             path: @"\nested\file.txt");
 
-        Activity activity = Assert.Single(stopped);
+        Activity activity = Assert.Single(
+            stopped
+                .ToArray()
+                .Where(candidate => candidate.GetTagItem("cfsharp.operation") as string ==
+                    "CloudProviderSession.FetchData"));
         Assert.Equal("CloudProviderSession.FetchData", activity.GetTagItem("cfsharp.operation"));
         Assert.Equal(1L, activity.GetTagItem("cfsharp.provider.connection_key"));
         Assert.Equal(2L, activity.GetTagItem("cfsharp.provider.transfer_key"));

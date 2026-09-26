@@ -29,6 +29,14 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
     }
 
     [Fact]
+    public void CorruptJournalStringLengthIsRejectedWithoutLargeAllocation()
+    {
+        byte[] payload = [0xff, 0xff, 0xff, 0xff, 0x7f];
+
+        Assert.Throws<InvalidOperationException>(() => LocalChangePayload.Decode(payload));
+    }
+
+    [Fact]
     public async Task CreateMoveAndDeleteChangesAreDurableAndAcknowledged()
     {
         await using ICloudStateStore store = await OpenStoreAsync();

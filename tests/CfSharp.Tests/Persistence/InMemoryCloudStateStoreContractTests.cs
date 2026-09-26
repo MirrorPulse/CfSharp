@@ -135,6 +135,7 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
                 .OrderBy(item => item.RelativePath.Count(character =>
                     character == Path.DirectorySeparatorChar ||
                     character == Path.AltDirectorySeparatorChar))
+                .ThenBy(item => item.RelativePath.Length)
                 .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(item => item.ItemId)
                 .ToArray();

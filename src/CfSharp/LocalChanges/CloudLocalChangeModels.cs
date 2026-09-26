@@ -191,6 +191,8 @@ internal sealed record LocalChangePayload(
     bool IsDirectory,
     DateTimeOffset ObservedAt)
 {
+    private const int MaximumEncodedPathBytes = 32767 * sizeof(char);
+
     internal byte[] Encode()
     {
         using MemoryStream stream = new();
@@ -211,8 +213,8 @@ internal sealed record LocalChangePayload(
         {
             using MemoryStream stream = new(payload.ToArray(), writable: false);
             using BinaryReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
-            string relativePath = reader.ReadString();
-            string previousRelativePath = reader.ReadString();
+            string relativePath = ReadBoundedString(reader, stream);
+            string previousRelativePath = ReadBoundedString(reader, stream);
             bool isDirectory = reader.ReadBoolean();
             long ticks = reader.ReadInt64();
             if (relativePath.Length == 0 ||
@@ -230,10 +232,48 @@ internal sealed record LocalChangePayload(
                 new DateTimeOffset(new DateTime(ticks, DateTimeKind.Utc)));
         }
         catch (Exception exception) when (
-            exception is EndOfStreamException or IOException or ArgumentException)
+            exception is EndOfStreamException or IOException or ArgumentException or
+            InvalidDataException)
         {
             throw new InvalidOperationException("The local-change journal payload is invalid.", exception);
         }
+    }
+
+    private static string ReadBoundedString(BinaryReader reader, Stream stream)
+    {
+        int byteCount = Read7BitEncodedInt(reader);
+        if (byteCount < 0 || byteCount > MaximumEncodedPathBytes ||
+            byteCount > stream.Length - stream.Position)
+        {
+            throw new InvalidDataException("The local-change journal string length is invalid.");
+        }
+
+        byte[] bytes = reader.ReadBytes(byteCount);
+        if (bytes.Length != byteCount)
+        {
+            throw new EndOfStreamException();
+        }
+
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    private static int Read7BitEncodedInt(BinaryReader reader)
+    {
+        int value = 0;
+        int shift = 0;
+        for (int index = 0; index < 5; index++)
+        {
+            byte next = reader.ReadByte();
+            value |= (next & 0x7f) << shift;
+            if ((next & 0x80) == 0)
+            {
+                return value;
+            }
+
+            shift += 7;
+        }
+
+        throw new InvalidDataException("The local-change journal string length is invalid.");
     }
 }
 

@@ -154,10 +154,22 @@ public sealed partial class CloudFileSystem
         }
         catch (CloudFilesException failure)
         {
-            CloudItemSnapshot failedSnapshot = await InspectCoreAsync(
-                file,
-                operation.StateStore,
-                CancellationToken.None).ConfigureAwait(false);
+            CloudItemSnapshot? failedSnapshot = null;
+            try
+            {
+                failedSnapshot = await InspectCoreAsync(
+                    file,
+                    operation.StateStore,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception inspectionFailure)
+            {
+                // Preserve the native failure and its HRESULT when post-failure inspection is
+                // unavailable; inspection is diagnostic and must not mask the transition error.
+                failure.Data["CfSharp.PostFailureInspection"] = inspectionFailure;
+                throw;
+            }
+
             throw new CloudAvailabilityTransitionException(
                 failure,
                 new CloudAvailabilityChangeResult(
@@ -165,7 +177,7 @@ public sealed partial class CloudFileSystem
                     target,
                     pinStateApplied,
                     contentStateApplied,
-                    failedSnapshot));
+                    failedSnapshot!));
         }
 
         CloudItemSnapshot snapshot = await InspectCoreAsync(

@@ -307,6 +307,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                          ORDER BY
                            (length(relative_path) - length(replace(relative_path, '\', '')) +
                             length(relative_path) - length(replace(relative_path, '/', ''))),
+                           length(relative_path),
                            relative_path COLLATE CFSHARP_UNICODE_NOCASE,
                            item_id;
                         """,

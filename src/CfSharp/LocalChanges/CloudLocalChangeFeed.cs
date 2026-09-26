@@ -459,7 +459,7 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _failure = exception;
+            Volatile.Write(ref _failure, exception);
             _availability.Writer.TryWrite(true);
         }
     }
@@ -883,9 +883,10 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
 
     private void ThrowIfFailed()
     {
-        if (_failure is not null)
+        Exception? failure = Volatile.Read(ref _failure);
+        if (failure is not null)
         {
-            throw new InvalidOperationException("The local-change feed stopped unexpectedly.", _failure);
+            throw new InvalidOperationException("The local-change feed stopped unexpectedly.", failure);
         }
     }
 }

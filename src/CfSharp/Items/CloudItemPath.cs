@@ -12,6 +12,23 @@ internal static class CloudItemPathResolver
             throw new ArgumentException("The item path must be relative to the sync root.", nameof(relativePath));
         }
 
+        foreach (string segment in relativePath.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                _ = CloudPlaceholderSpec.ValidateName(segment);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ArgumentException(
+                    "The item path contains an invalid Windows file-name segment.",
+                    nameof(relativePath),
+                    exception);
+            }
+        }
+
         string fullPath = Path.GetFullPath(Path.Combine(syncRootPath, relativePath));
         string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(syncRootPath));
         if (!IsSameOrChild(normalizedRoot, fullPath))

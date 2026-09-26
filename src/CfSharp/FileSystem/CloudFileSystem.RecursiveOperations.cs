@@ -250,55 +250,79 @@ public sealed partial class CloudFileSystem
         bool includeCurrent,
         List<RecursiveItemEntry> entries)
     {
-        FileAttributes attributes = File.GetAttributes(fullPath);
-        CloudItemKind kind = attributes.HasFlag(FileAttributes.Directory)
-            ? CloudItemKind.Directory
-            : CloudItemKind.File;
-        bool isLink = IsFileSystemLink(fullPath, kind, attributes);
-        RecursiveItemEntry current = new(fullPath, relativePath, kind, isLink);
-        if (includeCurrent && !childrenFirst)
+        Stack<TreeVisit> pending = new();
+        pending.Push(new(fullPath, relativePath, includeCurrent, PostVisit: false));
+        while (pending.Count != 0)
         {
-            entries.Add(current);
-        }
-
-        if (kind is CloudItemKind.Directory && !isLink)
-        {
-            string[] children = Directory.GetFileSystemEntries(fullPath);
-            Array.Sort(children, CompareEntryPaths);
-            foreach (string child in children)
+            TreeVisit visit = pending.Pop();
+            FileAttributes attributes;
+            try
             {
-                FileAttributes childAttributes = File.GetAttributes(child);
-                CloudItemKind childKind = childAttributes.HasFlag(FileAttributes.Directory)
-                    ? CloudItemKind.Directory
-                    : CloudItemKind.File;
-                string childRelativePath = relativePath.Length == 0
-                    ? Path.GetFileName(child)
-                    : Path.Combine(relativePath, Path.GetFileName(child));
-                if (childKind is CloudItemKind.Directory)
+                attributes = File.GetAttributes(visit.FullPath);
+            }
+            catch (FileNotFoundException)
+            {
+                continue;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                continue;
+            }
+
+            CloudItemKind kind = attributes.HasFlag(FileAttributes.Directory)
+                ? CloudItemKind.Directory
+                : CloudItemKind.File;
+            bool isLink = IsFileSystemLink(visit.FullPath, kind, attributes);
+            RecursiveItemEntry current = new(visit.FullPath, visit.RelativePath, kind, isLink);
+            if (visit.PostVisit || !childrenFirst || kind is CloudItemKind.File)
+            {
+                if (visit.IncludeCurrent)
                 {
-                    VisitLocalTree(
-                        child,
-                        childRelativePath,
-                        childrenFirst,
-                        includeCurrent: true,
-                        entries);
-                }
-                else
-                {
-                    entries.Add(new RecursiveItemEntry(
-                        child,
-                        childRelativePath,
-                        childKind,
-                        IsFileSystemLink(child, childKind, childAttributes)));
+                    entries.Add(current);
                 }
             }
-        }
 
-        if (includeCurrent && childrenFirst)
-        {
-            entries.Add(current);
+            if (visit.PostVisit || kind is not CloudItemKind.Directory || isLink)
+            {
+                continue;
+            }
+
+            string[] children;
+            try
+            {
+                children = Directory.GetFileSystemEntries(visit.FullPath);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                continue;
+            }
+            catch (FileNotFoundException)
+            {
+                continue;
+            }
+
+            Array.Sort(children, CompareEntryPaths);
+            if (childrenFirst && visit.IncludeCurrent)
+            {
+                pending.Push(new(visit.FullPath, visit.RelativePath, true, PostVisit: true));
+            }
+
+            for (int index = children.Length - 1; index >= 0; index--)
+            {
+                string child = children[index];
+                string childRelativePath = visit.RelativePath.Length == 0
+                    ? Path.GetFileName(child)
+                    : Path.Combine(visit.RelativePath, Path.GetFileName(child));
+                pending.Push(new(child, childRelativePath, true, PostVisit: false));
+            }
         }
     }
+
+    private readonly record struct TreeVisit(
+        string FullPath,
+        string RelativePath,
+        bool IncludeCurrent,
+        bool PostVisit);
 
     private static bool IsFileSystemLink(
         string path,

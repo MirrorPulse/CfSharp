@@ -243,6 +243,26 @@ public sealed class CloudPlaceholderPersistenceException : Exception
     public CloudPlaceholderBatchResult AppliedResult { get; }
 }
 
+/// <summary>Reports cancellation after a placeholder batch produced a partial result.</summary>
+public sealed class CloudPlaceholderCreationCanceledException : OperationCanceledException
+{
+    internal CloudPlaceholderCreationCanceledException(
+        CloudPlaceholderBatchResult partialResult,
+        OperationCanceledException innerException,
+        CancellationToken cancellationToken)
+        : base(
+            "Placeholder creation was canceled after one or more entries completed.",
+            innerException,
+            cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(partialResult);
+        PartialResult = partialResult;
+    }
+
+    /// <summary>Gets the immutable result for entries completed before cancellation.</summary>
+    public CloudPlaceholderBatchResult PartialResult { get; }
+}
+
 /// <summary>Describes one immutable result from explicit recursive execution.</summary>
 public sealed class CloudRecursiveOperationEntryResult
 {

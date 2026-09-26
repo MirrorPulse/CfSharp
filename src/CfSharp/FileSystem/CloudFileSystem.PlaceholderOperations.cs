@@ -108,6 +108,14 @@ public sealed partial class CloudFileSystem
                 entry.Status = CloudItemOperationStatus.Failed;
                 entry.Error = exception;
             }
+            catch (OperationCanceledException exception)
+            {
+                entry.Status = CloudItemOperationStatus.NotProcessed;
+                throw new CloudPlaceholderCreationCanceledException(
+                    CreateBatchResult(entries, batchError),
+                    exception,
+                    cancellationToken);
+            }
         }
 
         return CreateBatchResult(entries, batchError);

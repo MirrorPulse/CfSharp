@@ -210,9 +210,10 @@ public sealed partial class CloudFileSystem
         bool durableStateUpdated;
         try
         {
-            durableStateUpdated = await PersistTombstoneAsync(
+            durableStateUpdated = await PersistTombstonesAsync(
                 operation.StateStore,
                 item.RelativePath,
+                includeDescendants: item.Kind is CloudItemKind.Directory,
                 CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -323,30 +324,48 @@ public sealed partial class CloudFileSystem
         ICloudStateStore stateStore,
         string relativePath,
         CancellationToken cancellationToken)
+        => await PersistTombstonesAsync(
+            stateStore,
+            relativePath,
+            includeDescendants: false,
+            cancellationToken).ConfigureAwait(false);
+
+    private static async ValueTask<bool> PersistTombstonesAsync(
+        ICloudStateStore stateStore,
+        string relativePath,
+        bool includeDescendants,
+        CancellationToken cancellationToken)
     {
         await using ICloudStateTransaction transaction = await stateStore
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
-        CloudItemState? existing = await transaction.Items
-            .GetByRelativePathAsync(relativePath, cancellationToken)
-            .ConfigureAwait(false);
-        if (existing is null)
+        IReadOnlyList<CloudItemState> existing = includeDescendants
+            ? await transaction.Items.ListSubtreeAsync(relativePath, cancellationToken)
+                .ConfigureAwait(false)
+            : await ReadExactStateAsync(transaction.Items, relativePath, cancellationToken)
+                .ConfigureAwait(false);
+        if (existing.Count == 0)
         {
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             return false;
         }
 
-        await transaction.Items.UpsertAsync(
-            new CloudItemState(
-                existing.ItemId,
-                existing.RemoteId,
-                existing.RelativePath,
-                existing.Kind,
-                existing.RemoteRevision,
-                existing.LocalFileId,
-                isTombstone: true,
-                DateTimeOffset.UtcNow),
-            cancellationToken).ConfigureAwait(false);
+        DateTimeOffset updatedAt = DateTimeOffset.UtcNow;
+        foreach (CloudItemState item in existing)
+        {
+            await transaction.Items.UpsertAsync(
+                new CloudItemState(
+                    item.ItemId,
+                    item.RemoteId,
+                    item.RelativePath,
+                    item.Kind,
+                    item.RemoteRevision,
+                    item.LocalFileId,
+                    isTombstone: true,
+                    updatedAt),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }

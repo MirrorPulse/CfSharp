@@ -47,7 +47,11 @@ public abstract partial class CloudItem
     /// <param name="cancellationToken">
     /// Token observed before the synchronous deletion and during durable-state work.
     /// </param>
-    /// <returns>A missing-item snapshot and whether durable identity became a tombstone.</returns>
+    /// <returns>
+    /// A missing-item snapshot and whether durable identity became a tombstone. When deleting an
+    /// empty directory, all durable descendants are tombstoned as one transaction so orphaned
+    /// placeholder state cannot survive an earlier external child deletion.
+    /// </returns>
     /// <exception cref="InvalidOperationException">The sync root was selected.</exception>
     /// <exception cref="FileNotFoundException">The item no longer exists.</exception>
     /// <exception cref="CloudFilesException">Windows rejects the deletion.</exception>

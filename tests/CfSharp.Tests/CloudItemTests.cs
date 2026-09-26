@@ -66,6 +66,43 @@ public sealed class CloudItemTests
     }
 
     [Fact]
+    public async Task EmptyDirectoryDeleteTombstonesOrphanedDurableDescendants()
+    {
+        using TestDirectory root = new();
+        Directory.CreateDirectory(Path.Combine(root.Path, "orphan"));
+        CloudItemState directory = new(
+            Guid.NewGuid(),
+            "remote-directory",
+            "orphan",
+            CloudItemKind.Directory,
+            null,
+            null,
+            false,
+            DateTimeOffset.UtcNow);
+        CloudItemState child = new(
+            Guid.NewGuid(),
+            "remote-child",
+            Path.Combine("orphan", "stale.txt"),
+            CloudItemKind.File,
+            null,
+            null,
+            false,
+            DateTimeOffset.UtcNow);
+        await using CloudFileSystem fileSystem = await StartAsync(
+            root.Path,
+            new InspectionStore(directory, child));
+
+        CloudItemDeleteResult result = await fileSystem.GetDirectory("orphan").DeleteAsync();
+
+        Assert.True(result.DurableStateUpdated);
+        Assert.True(result.Snapshot.IsTombstone);
+        CloudItemSnapshot childSnapshot = await fileSystem
+            .GetFile(Path.Combine("orphan", "stale.txt"))
+            .InspectAsync();
+        Assert.True(childSnapshot.IsTombstone);
+    }
+
+    [Fact]
     public async Task InspectionRejectsLocalAndDurableKindMismatches()
     {
         using TestDirectory root = new();
@@ -392,12 +429,14 @@ public sealed class CloudItemTests
 
     private sealed class InspectionTransaction : ICloudStateTransaction, ICloudItemStateRepository
     {
-        private readonly IReadOnlyDictionary<string, CloudItemState> _items;
+        private readonly Dictionary<string, CloudItemState> _target;
+        private readonly Dictionary<string, CloudItemState> _items;
         private bool _disposed;
 
-        internal InspectionTransaction(IReadOnlyDictionary<string, CloudItemState> items)
+        internal InspectionTransaction(Dictionary<string, CloudItemState> items)
         {
-            _items = items;
+            _target = items;
+            _items = new(items, StringComparer.OrdinalIgnoreCase);
         }
 
         public ICloudItemStateRepository Items => this;
@@ -435,24 +474,66 @@ public sealed class CloudItemTests
 
         public ValueTask<IReadOnlyList<CloudItemState>> ListSubtreeAsync(
             string relativePath,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string prefix = relativePath.Length == 0
+                ? string.Empty
+                : relativePath + Path.DirectorySeparatorChar;
+            IReadOnlyList<CloudItemState> result = _items.Values
+                .Where(item =>
+                    string.Equals(item.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase) ||
+                    (prefix.Length != 0 && item.RelativePath.StartsWith(
+                        prefix,
+                        StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(item => item.RelativePath.Length)
+                .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return ValueTask.FromResult(result);
+        }
 
         public ValueTask UpsertAsync(
             CloudItemState item,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _items[item.RelativePath] = item;
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask RemoveAsync(
             Guid itemId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? path = _items.Values
+                .SingleOrDefault(item => item.ItemId == itemId)
+                ?.RelativePath;
+            if (path is not null)
+            {
+                _items.Remove(path);
+            }
 
-        public ValueTask CommitAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            return ValueTask.CompletedTask;
+        }
 
-        public ValueTask RollbackAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public ValueTask CommitAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _target.Clear();
+            foreach ((string path, CloudItemState item) in _items)
+            {
+                _target[path] = item;
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask RollbackAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {

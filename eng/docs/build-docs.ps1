@@ -67,12 +67,13 @@ try {
     }
 
     $toc = @'
-- name: CfSharp
+- name: Overview
   href: index.md
-- name: Guides
   items:
     - name: Documentation home
       href: articles/index.md
+- name: Guides
+  items:
     - name: Getting started
       href: articles/getting-started.md
     - name: Installation and prerequisites

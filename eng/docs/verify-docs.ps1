@@ -15,6 +15,32 @@ if (-not (Test-Path $manifestPath)) {
     throw "Documentation manifest is missing: $manifestPath"
 }
 
+$requiredFiles = @(
+    'toc.html',
+    'public\main.css',
+    'public\main.js',
+    'api\CfSharp.html',
+    'articles\getting-started.html'
+)
+foreach ($requiredFile in $requiredFiles) {
+    $requiredPath = Join-Path $resolvedRoot $requiredFile
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Documentation bundle is missing required file: $requiredFile"
+    }
+}
+
+$tocHtml = Get-Content -LiteralPath (Join-Path $resolvedRoot 'toc.html') -Raw
+foreach ($navigationMarker in @('title="Overview"', '>Guides</a>', '>API reference</a>')) {
+    if ($tocHtml -notlike "*$navigationMarker*") {
+        throw "Documentation navigation is missing expected marker: $navigationMarker"
+    }
+}
+
+$themeCss = Get-Content -LiteralPath (Join-Path $resolvedRoot 'public\main.css') -Raw
+if ($themeCss -notlike '*--cf-radius-xl*') {
+    throw 'Documentation custom theme marker --cf-radius-xl is missing.'
+}
+
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 foreach ($property in @('schemaVersion', 'project', 'sourceCommit', 'generatedAtUtc', 'generator', 'configuration', 'contentRoot', 'files')) {
     if ($null -eq $manifest.$property) {

@@ -48,7 +48,8 @@
     "dest": "../../artifacts/docs/cfsharp",
     "template": [
       "default",
-      "modern"
+      "modern",
+      "template"
     ],
     "globalMetadata": {
       "_appTitle": "CfSharp documentation",

@@ -165,6 +165,22 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         CloudDiagnostics.RecordTransferLifetime(created: true);
     }
 
+    /// <summary>Releases a leaked transfer handle reference as a last-resort safety net.</summary>
+    ~CloudTransfer()
+    {
+        // The handle reference contains a DangerousAddRef. Recover it on the finalizer thread if
+        // a caller forgot to dispose the transfer; explicit disposal remains the normal path.
+        try
+        {
+            Dispose(disposing: false);
+            CloudDiagnostics.RecordFinalizerRecovery("cfsharp.item.transfer", recovered: true);
+        }
+        catch
+        {
+            CloudDiagnostics.RecordFinalizerRecovery("cfsharp.item.transfer", recovered: false);
+        }
+    }
+
     /// <summary>Gets the lease that owns the protected item lifetime.</summary>
     public CloudItemLease Lease => _lease;
 
@@ -494,6 +510,12 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
     /// <summary>Releases the transfer key and its protected-handle reference.</summary>
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    private void Dispose(bool disposing)
+    {
         lock (_gate)
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -510,13 +532,13 @@ public sealed unsafe class CloudTransfer : IDisposable, IAsyncDisposable
         _lease.TransferDisposed(this);
         CloudDiagnostics.StopActivity(_activity, "disposed");
         CloudDiagnostics.RecordTransferLifetime(created: false);
-        GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()
     {
         Dispose();
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

@@ -38,6 +38,23 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
         CloudDiagnostics.RecordLeaseLifetime(created: true);
     }
 
+    /// <summary>Releases leaked native and operation resources as a last-resort safety net.</summary>
+    ~CloudItemLease()
+    {
+        // A missed Dispose must not keep the file-system admission lease alive forever. The
+        // finalizer is deliberately a last-resort, non-throwing release path; normal callers
+        // should still dispose explicitly so native errors remain observable.
+        try
+        {
+            Dispose(disposing: false);
+            CloudDiagnostics.RecordFinalizerRecovery("cfsharp.item.lease", recovered: true);
+        }
+        catch
+        {
+            CloudDiagnostics.RecordFinalizerRecovery("cfsharp.item.lease", recovered: false);
+        }
+    }
+
     /// <summary>Gets the immutable item reference held by this lease.</summary>
     public CloudItem Item { get; }
 
@@ -144,6 +161,12 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
     /// <summary>Releases an active transfer, then the protected handle and operation admission.</summary>
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    private void Dispose(bool disposing)
+    {
         CloudTransfer? transfer;
         lock (_gate)
         {
@@ -166,7 +189,6 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
             _operation.Dispose();
             CloudDiagnostics.StopActivity(_activity, "disposed");
             CloudDiagnostics.RecordLeaseLifetime(created: false);
-            GC.SuppressFinalize(this);
         }
     }
 
@@ -174,6 +196,7 @@ public sealed unsafe class CloudItemLease : IDisposable, IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         Dispose();
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 

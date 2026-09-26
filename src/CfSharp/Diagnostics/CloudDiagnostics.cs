@@ -39,6 +39,8 @@ public static class CloudDiagnostics
         Meter.CreateCounter<long>("cfsharp.item.leases");
     private static readonly System.Diagnostics.Metrics.Counter<long> TransferLifetimes =
         Meter.CreateCounter<long>("cfsharp.item.transfers");
+    private static readonly System.Diagnostics.Metrics.Counter<long> FinalizerRecoveries =
+        Meter.CreateCounter<long>("cfsharp.resource.finalizer_recoveries");
 
     internal static Activity? StartActivity(string name, CloudProviderRequestKind kind)
     {
@@ -273,6 +275,22 @@ public static class CloudDiagnostics
         catch
         {
             // Meter listeners are diagnostic only.
+        }
+    }
+
+    internal static void RecordFinalizerRecovery(string resource, bool recovered)
+    {
+        try
+        {
+            FinalizerRecoveries.Add(
+                1,
+                new KeyValuePair<string, object?>("cfsharp.resource", resource),
+                new KeyValuePair<string, object?>(
+                    "cfsharp.recovery", recovered ? "success" : "failure"));
+        }
+        catch
+        {
+            // Finalizer diagnostics must never throw on the finalizer thread.
         }
     }
 

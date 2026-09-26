@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace CfSharp;
 
@@ -1175,8 +1176,9 @@ public sealed partial class CloudFileSystem
         CloudRemoteConflictReason reason;
         try
         {
-            RemoteConflictEnvelope envelope = JsonSerializer.Deserialize<RemoteConflictEnvelope>(
-                    durableState.Payload.Span)
+            RemoteConflictEnvelope envelope = JsonSerializer.Deserialize(
+                    durableState.Payload.Span,
+                    RemoteChangesJsonContext.Default.RemoteConflictEnvelope)
                 ?? throw new InvalidDataException("The durable remote conflict envelope is empty.");
             if (envelope.Version != RemoteConflictEnvelopeVersion)
             {
@@ -1298,7 +1300,9 @@ public sealed partial class CloudFileSystem
             metadataEnvelope,
             change.CursorAfter.ToArray(),
             (int)conflict.Reason);
-        return JsonSerializer.SerializeToUtf8Bytes(envelope);
+        return JsonSerializer.SerializeToUtf8Bytes(
+            envelope,
+            RemoteChangesJsonContext.Default.RemoteConflictEnvelope);
     }
 
     private static CloudStateConflictKind ToDurableConflictKind(CloudRemoteConflictReason reason) =>
@@ -1333,6 +1337,12 @@ public sealed partial class CloudFileSystem
         long? LastAccessTimeUtcTicks,
         long? LastWriteTimeUtcTicks,
         long? ChangeTimeUtcTicks);
+
+    [JsonSerializable(typeof(RemoteConflictEnvelope))]
+    [JsonSerializable(typeof(RemoteMetadataEnvelope))]
+    private partial class RemoteChangesJsonContext : JsonSerializerContext
+    {
+    }
 
     private sealed record RemoteEntryContext(
         CloudItemState? LocalState,

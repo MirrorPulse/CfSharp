@@ -34,6 +34,10 @@ jobs:
       - name: Build
         run: dotnet build CfSharp.sln --configuration Release --no-restore
 
+      - name: Verify trim and Native AOT boundaries
+        shell: pwsh
+        run: ./eng/verify-runtime-boundaries.ps1
+
       - name: Test
         run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 

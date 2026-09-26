@@ -1,5 +1,13 @@
 internal static class SamplePathSafety
 {
+    internal static string NormalizeSyncRootPath(string path, string parameterName)
+    {
+        string fullPath = NormalizeFullPath(path, parameterName);
+        RejectDangerousSyncRoot(fullPath, parameterName);
+        RejectReparsePoints(fullPath);
+        return fullPath;
+    }
+
     internal static string NormalizeExistingDirectory(string path, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
@@ -13,6 +21,23 @@ internal static class SamplePathSafety
 
         RejectReparsePoints(fullPath);
         return fullPath;
+    }
+
+    internal static void EnsureDisjointPaths(
+        string firstPath,
+        string firstName,
+        string secondPath,
+        string secondName)
+    {
+        string first = Path.TrimEndingDirectorySeparator(
+            NormalizeFullPath(firstPath, firstName));
+        string second = Path.TrimEndingDirectorySeparator(
+            NormalizeFullPath(secondPath, secondName));
+        if (IsSameOrChild(first, second) || IsSameOrChild(second, first))
+        {
+            throw new InvalidDataException(
+                $"The {firstName} and {secondName} paths must not overlap: '{first}' and '{second}'.");
+        }
     }
 
     internal static string ResolveContainedPath(string rootPath, string candidatePath)
@@ -119,6 +144,29 @@ internal static class SamplePathSafety
             exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
             throw new ArgumentException("The path is invalid.", parameterName, exception);
+        }
+    }
+
+    private static void RejectDangerousSyncRoot(string fullPath, string parameterName)
+    {
+        string normalized = Path.TrimEndingDirectorySeparator(fullPath);
+        string volumeRoot = Path.TrimEndingDirectorySeparator(
+            Path.GetPathRoot(fullPath)
+                ?? throw new ArgumentException("The path has no recognizable volume root.", parameterName));
+        string windowsRoot = Path.TrimEndingDirectorySeparator(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows));
+        string usersRoot = Path.TrimEndingDirectorySeparator(
+            Directory.GetParent(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))?.FullName
+                ?? string.Empty);
+        if (string.Equals(normalized, volumeRoot, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrEmpty(windowsRoot) &&
+                string.Equals(normalized, windowsRoot, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrEmpty(usersRoot) &&
+                string.Equals(normalized, usersRoot, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidDataException(
+                $"The {parameterName} path '{fullPath}' is a protected system location; " +
+                "choose a dedicated child directory.");
         }
     }
 

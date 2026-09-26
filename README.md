@@ -310,8 +310,10 @@ online-only placeholders, then verifies hydration through ordinary file reads:
 
 ```powershell
 dotnet run --project samples/CfSharp.SampleProvider -- `
-  C:\CloudContent `
-  C:\CloudSyncRoot
+  run C:\CloudContent `
+  C:\CloudSyncRoot `
+  --state-db C:\CloudState\cfsharp.db `
+  --once
 ```
 
 The sample closes its process-scoped provider session before exiting but intentionally leaves the

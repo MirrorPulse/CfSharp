@@ -168,6 +168,28 @@ public sealed class SamplePathSafetyTests
     }
 
     [Fact]
+    public void SyncRootValidationRejectsProtectedLocations()
+    {
+        string volumeRoot = Path.GetPathRoot(Environment.SystemDirectory)!;
+        Assert.Throws<InvalidDataException>(() =>
+            SamplePathSafety.NormalizeSyncRootPath(volumeRoot, "sync-root"));
+
+        string windowsRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        Assert.Throws<InvalidDataException>(() =>
+            SamplePathSafety.NormalizeSyncRootPath(windowsRoot, "sync-root"));
+    }
+
+    [Fact]
+    public void DisjointPathValidationRejectsNestedRoots()
+    {
+        using TemporaryDirectory root = new();
+        string child = Path.Combine(root.Path, "child");
+
+        Assert.Throws<InvalidDataException>(() =>
+            SamplePathSafety.EnsureDisjointPaths(root.Path, "content", child, "sync-root"));
+    }
+
+    [Fact]
     public void ResolveContainedPathRejectsRootedOutsidePath()
     {
         using TemporaryDirectory root = new();

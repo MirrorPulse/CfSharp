@@ -60,9 +60,14 @@ internal static class SampleProvider
     [SupportedOSPlatform("windows10.0.19041")]
     private static async Task<int> RegisterAsync(string requestedSyncRootPath)
     {
-        string syncRootPath = Path.GetFullPath(requestedSyncRootPath);
+        string syncRootPath = SamplePathSafety.NormalizeSyncRootPath(
+            requestedSyncRootPath,
+            "sync-root");
         Directory.CreateDirectory(syncRootPath);
         syncRootPath = SamplePathSafety.NormalizeExistingDirectory(syncRootPath, "sync-root");
+        Console.Error.WriteLine(
+            "Warning: CfSharp Sample uses a fixed sample ProviderId. Assign a unique ProviderId " +
+            "and registration id before distributing a production provider.");
         bool shellRegistrationAlreadyExisted =
             await ShellSyncRootRegistrar.RegisterAsync(syncRootPath);
         CloudSyncRoot syncRoot;
@@ -98,7 +103,7 @@ internal static class SampleProvider
     private static int Unregister(string requestedSyncRootPath)
     {
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
-            requestedSyncRootPath,
+            SamplePathSafety.NormalizeSyncRootPath(requestedSyncRootPath, "sync-root"),
             "sync-root");
         bool shellRegistrationAlreadyExists =
             ShellSyncRootRegistrar.TryGetRegisteredPath(out string? existingShellPath);
@@ -137,7 +142,7 @@ internal static class SampleProvider
     private static int Enumerate(string requestedSyncRootPath)
     {
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
-            requestedSyncRootPath,
+            SamplePathSafety.NormalizeSyncRootPath(requestedSyncRootPath, "sync-root"),
             "sync-root");
         foreach (string path in Directory.EnumerateFiles(
                      syncRootPath,
@@ -157,7 +162,17 @@ internal static class SampleProvider
             options.ContentRoot!,
             "content");
         string syncRootPath = SamplePathSafety.NormalizeExistingDirectory(
-            options.SyncRootPath,
+            SamplePathSafety.NormalizeSyncRootPath(options.SyncRootPath, "sync-root"),
+            "sync-root");
+        SamplePathSafety.EnsureDisjointPaths(
+            contentRoot,
+            "content",
+            syncRootPath,
+            "sync-root");
+        SamplePathSafety.EnsureDisjointPaths(
+            options.StateDatabasePath!,
+            "state database",
+            syncRootPath,
             "sync-root");
         CloudSyncRoot syncRoot = CloudSyncRoot.Open(syncRootPath);
         LocalFolderContentProvider provider = new(contentRoot, syncRootPath);

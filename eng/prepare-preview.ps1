@@ -37,6 +37,7 @@ foreach ($relativeProject in $projects) {
         --configuration $Configuration `
         --no-restore `
         --output $packageOutput `
+        -p:TargetPlatformDisplayName=Windows `
         /p:Version=$Version `
         /p:PackageVersion=$Version `
         /p:IncludeSymbols=false
@@ -107,7 +108,11 @@ $consumerNuGetConfig = Join-Path $smokeRoot 'NuGet.config'
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Remove="Microsoft.DotNet.ILCompiler;Microsoft.NET.ILLink.Tasks" />
+  </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="CfSharp" Version="$Version" />
   </ItemGroup>
@@ -128,26 +133,39 @@ Console.WriteLine(new CloudFilesPlatformInfo(26100, 0, 1536).Supports(
   <packageSources>
     <clear />
     <add key="preview" value="$packageOutput" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
   </packageSources>
   <packageSourceMapping>
     <packageSource key="preview">
       <package pattern="CfSharp*" />
     </packageSource>
-    <packageSource key="nuget.org">
-      <package pattern="*" />
-    </packageSource>
   </packageSourceMapping>
 </configuration>
 "@ | Set-Content -LiteralPath $consumerNuGetConfig -Encoding utf8
 
-& dotnet restore $consumerProject --configfile $consumerNuGetConfig --ignore-failed-sources
-if ($LASTEXITCODE -ne 0) {
-    throw "Preview consumer restore failed with exit code $LASTEXITCODE."
+$savedUserProfile = $env:USERPROFILE
+$savedAppData = $env:APPDATA
+$savedDotnetCliHome = $env:DOTNET_CLI_HOME
+$consumerUserProfile = Join-Path $versionOutput '.consumer-user'
+$env:USERPROFILE = $consumerUserProfile
+$env:APPDATA = Join-Path $consumerUserProfile 'AppData/Roaming'
+$env:DOTNET_CLI_HOME = Join-Path $consumerUserProfile '.dotnet'
+New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:DOTNET_CLI_HOME | Out-Null
+try {
+    & dotnet restore $consumerProject --configfile $consumerNuGetConfig --ignore-failed-sources `
+        -p:TargetPlatformDisplayName=Windows
+    if ($LASTEXITCODE -ne 0) {
+        throw "Preview consumer restore failed with exit code $LASTEXITCODE."
+    }
+    & dotnet build $consumerProject --configuration $Configuration --no-restore `
+        -p:TargetPlatformDisplayName=Windows
+    if ($LASTEXITCODE -ne 0) {
+        throw "Preview consumer build failed with exit code $LASTEXITCODE."
+    }
 }
-& dotnet build $consumerProject --configuration $Configuration --no-restore
-if ($LASTEXITCODE -ne 0) {
-    throw "Preview consumer build failed with exit code $LASTEXITCODE."
+finally {
+    $env:USERPROFILE = $savedUserProfile
+    $env:APPDATA = $savedAppData
+    $env:DOTNET_CLI_HOME = $savedDotnetCliHome
 }
 
 $packageProject = Join-Path $root 'samples/CfSharp.SampleProvider.Package/CfSharp.SampleProvider.Package.wapproj'

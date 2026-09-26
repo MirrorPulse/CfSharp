@@ -422,11 +422,22 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             {
                 stateStore = currentContext.StateStore;
                 Interlocked.Increment(ref _activeOperations);
-                return new CloudFileSystemOperationLease(
-                    this,
-                    stateStore,
-                    pathLease: null,
-                    scopes: []);
+                try
+                {
+                    return new CloudFileSystemOperationLease(
+                        this,
+                        stateStore,
+                        pathLease: null,
+                        pathHandleLease: CloudPathHandleLease.OpenParentChains(
+                            SyncRootPath,
+                            requestedScopes.Select(static scope => scope.Path)),
+                        scopes: []);
+                }
+                catch
+                {
+                    ReleaseOperation();
+                    throw;
+                }
             }
 
             stateStore = _stateStore ??
@@ -450,10 +461,23 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             CloudItemOperationCoordinator.CloudItemOperationPathLease pathLease =
                 await _operationCoordinator.AcquireAsync(requestedScopes, cancellationToken)
                     .ConfigureAwait(false);
+            CloudPathHandleLease pathHandleLease;
+            try
+            {
+                pathHandleLease = CloudPathHandleLease.OpenParentChains(
+                    SyncRootPath,
+                    requestedScopes.Select(static scope => scope.Path));
+            }
+            catch
+            {
+                pathLease.Dispose();
+                throw;
+            }
             return new CloudFileSystemOperationLease(
                 this,
                 stateStore,
                 pathLease,
+                pathHandleLease,
                 requestedScopes);
         }
         catch
@@ -629,6 +653,7 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
     {
         private CloudFileSystem? _owner;
         private CloudItemOperationCoordinator.CloudItemOperationPathLease? _pathLease;
+        private CloudPathHandleLease? _pathHandleLease;
         private readonly IReadOnlyList<CloudItemOperationScope> _scopes;
         private CloudFileSystemOperationLease? _previousContext;
         private int _establishesContext;
@@ -637,11 +662,13 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             CloudFileSystem owner,
             ICloudStateStore stateStore,
             CloudItemOperationCoordinator.CloudItemOperationPathLease? pathLease,
+            CloudPathHandleLease? pathHandleLease,
             IReadOnlyList<CloudItemOperationScope> scopes)
         {
             _owner = owner;
             StateStore = stateStore;
             _pathLease = pathLease;
+            _pathHandleLease = pathHandleLease;
             _scopes = scopes;
         }
 
@@ -687,6 +714,7 @@ public sealed partial class CloudFileSystem : IDisposable, IAsyncDisposable
             }
 
             Interlocked.Exchange(ref _pathLease, null)?.Dispose();
+            Interlocked.Exchange(ref _pathHandleLease, null)?.Dispose();
             owner.ReleaseOperation();
         }
     }

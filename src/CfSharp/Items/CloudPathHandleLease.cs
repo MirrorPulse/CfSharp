@@ -12,9 +12,10 @@ namespace CfSharp;
 /// <remarks>
 /// The Cloud Files path APIs accept strings rather than directory handles. Holding each existing
 /// ancestor with delete sharing disabled prevents another process from replacing the checked
-/// directory chain between validation and the native call. Reparse points are opened without
-/// following the final component and are rejected. This is intentionally an internal guard; the
-/// native API remains the authority for the final create operation.
+/// directory chain between validation and the native call. Ordinary reparse points are rejected;
+/// Cloud Files placeholder directories are allowed because they are the namespace objects being
+/// operated on. This is intentionally an internal guard; the native API remains the authority
+/// for the final create operation.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
 internal sealed class CloudPathHandleLease : IDisposable
@@ -55,24 +56,58 @@ internal sealed class CloudPathHandleLease : IDisposable
         List<SafeFileHandle> handles = [];
         try
         {
-            string volumeRoot = Path.GetPathRoot(target)!;
-            string current = volumeRoot;
-            OpenAndAdd(
-                current,
-                handles,
-                isDirectory: true,
-                allowReparsePoint: string.Equals(current, root, StringComparison.OrdinalIgnoreCase));
-            string remainder = target[volumeRoot.Length..];
-            foreach (string segment in remainder.Split(
-                         [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                         StringSplitOptions.RemoveEmptyEntries))
+            OpenDirectoryChainInto(root, target, handles);
+
+            return new CloudPathHandleLease(handles);
+        }
+        catch
+        {
+            foreach (SafeFileHandle handle in handles)
             {
-                current = Path.Combine(current, segment);
-                OpenAndAdd(
-                    current,
-                    handles,
-                    isDirectory: true,
-                    allowReparsePoint: string.Equals(current, root, StringComparison.OrdinalIgnoreCase));
+                handle.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>Opens the parent directory chain for each path in one disposable lease.</summary>
+    /// <remarks>
+    /// The final item is deliberately not opened: Cloud Files placeholders use reparse points,
+    /// and the native operation must remain the authority for that final component. Holding every
+    /// existing ancestor without delete sharing prevents an intermediate junction or mount point
+    /// from being swapped between managed validation and the native string-based call.
+    /// </remarks>
+    internal static CloudPathHandleLease OpenParentChains(
+        string syncRootPath,
+        IEnumerable<string> paths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(syncRootPath);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(syncRootPath));
+        List<SafeFileHandle> handles = [];
+        try
+        {
+            foreach (string path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                string targetDirectory = string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)
+                    ? root
+                    : Directory.GetParent(fullPath)?.FullName
+                        ?? throw new ArgumentException(
+                            "The path has no parent directory.",
+                            nameof(paths));
+                // Inspection and retry paths may intentionally refer to a durable item whose
+                // local directory was removed. Walk back to the nearest existing ancestor; the
+                // chain opened below still protects every component that exists today.
+                while (!Directory.Exists(targetDirectory) &&
+                       !string.Equals(targetDirectory, root, StringComparison.OrdinalIgnoreCase))
+                {
+                    targetDirectory = Directory.GetParent(targetDirectory)?.FullName
+                        ?? root;
+                }
+                OpenDirectoryChainInto(root, targetDirectory, handles);
             }
 
             return new CloudPathHandleLease(handles);
@@ -130,6 +165,41 @@ internal sealed class CloudPathHandleLease : IDisposable
         {
             handle.Dispose();
             throw;
+        }
+    }
+
+    private static void OpenDirectoryChainInto(
+        string root,
+        string target,
+        List<SafeFileHandle> handles)
+    {
+        if (!IsSameOrChild(root, target))
+        {
+            throw new ArgumentException(
+                "The target directory must remain beneath the sync root.",
+                nameof(target));
+        }
+
+        string volumeRoot = Path.GetPathRoot(target)!;
+        string current = volumeRoot;
+        OpenAndAdd(
+            current,
+            handles,
+            isDirectory: true,
+            allowReparsePoint: string.Equals(current, root, StringComparison.OrdinalIgnoreCase) ||
+                CloudItemInspector.IsCloudPlaceholder(current));
+        string remainder = target[volumeRoot.Length..];
+        foreach (string segment in remainder.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            OpenAndAdd(
+                current,
+                handles,
+                isDirectory: true,
+                allowReparsePoint: string.Equals(current, root, StringComparison.OrdinalIgnoreCase) ||
+                    CloudItemInspector.IsCloudPlaceholder(current));
         }
     }
 

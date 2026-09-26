@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Xunit.Sdk;
 
 namespace CfSharp.Tests;
 
@@ -19,6 +20,44 @@ public sealed class CloudFileSystemTests
         using TestDirectory root = new();
         Assert.Throws<InvalidOperationException>(() =>
             CloudFileSystem.CreateBuilder(root.Path).Build());
+    }
+
+    [Fact]
+    public void OperationPathLeaseFallsBackToExistingAncestorForMissingItems()
+    {
+        using TestDirectory root = new();
+        string missingPath = Path.Combine(root.Path, "removed", "item.txt");
+
+        using CloudPathHandleLease lease = CloudPathHandleLease.OpenParentChains(
+            root.Path,
+            [missingPath]);
+    }
+
+    [Fact]
+    public void OperationPathLeaseRejectsAnIntermediateDirectoryLink()
+    {
+        using TestDirectory root = new();
+        using TestDirectory outside = new();
+        string link = Path.Combine(root.Path, "linked");
+        try
+        {
+            Directory.CreateSymbolicLink(link, outside.Path);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw SkipException.ForSkip(
+                $"The test host cannot create a symbolic link: {exception.Message}");
+        }
+        catch (IOException exception) when (exception.HResult == unchecked((int)0x80070005))
+        {
+            throw SkipException.ForSkip(
+                $"The test host cannot create a symbolic link: {exception.Message}");
+        }
+
+        Assert.Throws<ArgumentException>(() =>
+            CloudPathHandleLease.OpenParentChains(
+                root.Path,
+                [Path.Combine(link, "item.txt")]));
     }
 
     [Fact]

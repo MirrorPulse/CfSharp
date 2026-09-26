@@ -132,7 +132,9 @@ public sealed class InMemoryCloudStateStoreContractTests : CloudStateStoreContra
                         StringComparison.OrdinalIgnoreCase) ||
                     item.RelativePath.StartsWith(primaryPrefix, StringComparison.OrdinalIgnoreCase) ||
                     item.RelativePath.StartsWith(alternatePrefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(item => item.RelativePath.Length)
+                .OrderBy(item => item.RelativePath.Count(character =>
+                    character == Path.DirectorySeparatorChar ||
+                    character == Path.AltDirectorySeparatorChar))
                 .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(item => item.ItemId)
                 .ToArray();

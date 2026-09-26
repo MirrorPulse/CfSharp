@@ -85,6 +85,40 @@ public abstract class CloudStateStoreContractTests
     }
 
     [Fact]
+    public async Task ListSubtreeOrdersByPathDepthBeforePathLength()
+    {
+        ICloudStateStoreFactory factory = CreateFactory();
+        await using ICloudStateStore store = await factory.OpenAsync(CreateContext());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await using (ICloudStateTransaction write = await store.BeginTransactionAsync())
+        {
+            await write.Items.UpsertAsync(CreateItem(
+                "depth-root",
+                "root",
+                CloudItemKind.Directory,
+                now));
+            await write.Items.UpsertAsync(CreateItem(
+                "depth-long-child",
+                "root\\very-long-name.txt",
+                CloudItemKind.File,
+                now));
+            await write.Items.UpsertAsync(CreateItem(
+                "depth-short-grandchild",
+                "root\\x\\y",
+                CloudItemKind.File,
+                now));
+            await write.CommitAsync();
+        }
+
+        await using ICloudStateTransaction read = await store.BeginTransactionAsync();
+        IReadOnlyList<CloudItemState> items = await read.Items.ListSubtreeAsync("root");
+        Assert.Equal(
+            ["root", "root\\very-long-name.txt", "root\\x\\y"],
+            items.Select(static item => item.RelativePath));
+        await read.RollbackAsync();
+    }
+
+    [Fact]
     public async Task DisposalAndExplicitRollbackDiscardWrites()
     {
         ICloudStateStoreFactory factory = CreateFactory();

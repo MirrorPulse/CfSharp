@@ -85,11 +85,14 @@ jobs:
           }
 
           $env:GIT_TERMINAL_PROMPT = '0'
-          $env:GIT_CONFIG_COUNT = '1'
-          $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
-          $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: bearer $env:CFSHARP_DOCS_TOKEN"
+          $credentialBytes = [System.Text.Encoding]::ASCII.GetBytes("x-access-token:$env:CFSHARP_DOCS_TOKEN")
+          $encodedCredentials = [Convert]::ToBase64String($credentialBytes)
+          $authHeader = "AUTHORIZATION: basic $encodedCredentials"
           try {
-              git clone --depth 1 --branch main https://github.com/MirrorPulse/mirrorpulse.github.io.git $pagesRoot
+              git -c "http.extraheader=$authHeader" clone --depth 1 --branch main https://github.com/MirrorPulse/mirrorpulse.github.io.git $pagesRoot
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Pages repository clone failed with exit code $LASTEXITCODE."
+              }
               $pagesDocs = Join-Path $pagesRoot 'content/cfsharp'
               New-Item -ItemType Directory -Path $pagesDocs -Force | Out-Null
               Get-ChildItem -LiteralPath $pagesDocs -Force | Remove-Item -Recurse -Force
@@ -109,12 +112,15 @@ jobs:
               git -C $pagesRoot config user.name 'MirrorPulse Docs Bot'
               git -C $pagesRoot config user.email 'docs-bot@mirrorpulse.github.io'
               git -C $pagesRoot commit -m "docs(cfsharp): sync $env:GITHUB_SHA"
-              git -C $pagesRoot push origin HEAD:main
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Pages documentation commit failed with exit code $LASTEXITCODE."
+              }
+              git -c "http.extraheader=$authHeader" -C $pagesRoot push origin HEAD:main
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Pages documentation push failed with exit code $LASTEXITCODE."
+              }
           }
           finally {
-              Remove-Item Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
-              Remove-Item Env:GIT_CONFIG_KEY_0 -ErrorAction SilentlyContinue
-              Remove-Item Env:GIT_CONFIG_COUNT -ErrorAction SilentlyContinue
               Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
               Remove-Item Env:CFSHARP_DOCS_TOKEN -ErrorAction SilentlyContinue
           }

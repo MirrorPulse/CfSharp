@@ -36,7 +36,10 @@ public static class CloudFilesPlatform
     [SupportedOSPlatform(MinimumWindowsVersion)]
     public static CloudFilesPlatformInfo GetCurrent()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+        if (!OperatingSystem.IsWindowsVersionAtLeast(
+            10,
+            0,
+            checked((int)CloudFilesPlatformInfo.MinimumCoreWindowsBuild)))
         {
             throw new PlatformNotSupportedException(
                 "The Windows Cloud Files API requires Windows 10, version 1709 or later.");

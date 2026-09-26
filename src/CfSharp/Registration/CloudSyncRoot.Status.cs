@@ -114,7 +114,10 @@ public sealed partial class CloudSyncRoot
 
     private static void EnsureRichStatusSupported()
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134))
+        if (!OperatingSystem.IsWindowsVersionAtLeast(
+            10,
+            0,
+            checked((int)CloudFilesPlatformInfo.RichStatusMinimumWindowsBuild)))
         {
             throw new PlatformNotSupportedException(
                 "Rich Cloud Files sync-root status requires Windows 10, version 1803 or later.");

@@ -1670,7 +1670,10 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
             return ReportProgressV1(connectionKey, transferKey, total, completed);
         }
 
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
+        if (!OperatingSystem.IsWindowsVersionAtLeast(
+            10,
+            0,
+            checked((int)CloudFilesPlatformInfo.ProviderProgressV2MinimumWindowsBuild)))
         {
             return fallbackPolicy is CloudProgressFallbackPolicy.FallbackToV1
                 ? ReportProgressV1(connectionKey, transferKey, total, completed)

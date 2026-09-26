@@ -74,8 +74,7 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     private int _stopping;
     private int _disposed;
     private int _nativeStateReleased;
-    private readonly TaskCompletionSource<object?> _disposeCompletion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource<object?> _disposeCompletion = CreateDisposeCompletion();
 
     private CloudProviderSession(
         ICloudFileContentProvider contentProvider,
@@ -192,9 +191,23 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
     /// <returns>A task that completes after disconnection and native-memory release.</returns>
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        Task? existingAttempt = null;
+        lock (_lifecycleGate)
         {
-            await _disposeCompletion.Task.ConfigureAwait(false);
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                existingAttempt = _disposeCompletion.Task;
+            }
+            else
+            {
+                Volatile.Write(ref _disposed, 1);
+                _disposeCompletion = CreateDisposeCompletion();
+            }
+        }
+
+        if (existingAttempt is not null)
+        {
+            await existingAttempt.ConfigureAwait(false);
             return;
         }
 
@@ -271,11 +284,12 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                 _connectionKey.Internal,
                 0,
                 _syncRootPath);
-            Interlocked.Exchange(ref _disposed, 0);
-            throw CloudFilesException.FromHResult(
+            CloudFilesException failure = CloudFilesException.FromHResult(
                 "CloudProviderSession.Disconnect",
                 _syncRootPath,
                 disconnectResult);
+            FailDisposeAttempt(failure);
+            throw failure;
         }
 
         FinalizeNativeDispose();
@@ -285,7 +299,6 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         }
 
         GC.SuppressFinalize(this);
-        ThrowIfFailed("CloudProviderSession.Dispose", disconnectResult);
     }
 
     internal Task DisposeCompletion => _disposeCompletion.Task;
@@ -308,17 +321,20 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                     _connectionKey.Internal,
                     0,
                     _syncRootPath);
-                Interlocked.Exchange(ref _disposed, 0);
+                FailDisposeAttempt(CloudFilesException.FromHResult(
+                    "CloudProviderSession.Disconnect",
+                    _syncRootPath,
+                    disconnectResult));
                 return;
             }
 
             FinalizeNativeDispose();
         }
-        catch
+        catch (Exception exception)
         {
             // Keep callback memory and context owned if the deferred disconnect attempt itself
             // fails unexpectedly. The next explicit DisposeAsync call can retry the boundary.
-            Interlocked.Exchange(ref _disposed, 0);
+            FailDisposeAttempt(exception);
         }
     }
 
@@ -331,8 +347,21 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
 
         ReleaseNativeState();
         _shutdown.Dispose();
-        _disposeCompletion.TrySetResult(null);
+        Volatile.Read(ref _disposeCompletion).TrySetResult(null);
     }
+
+    private void FailDisposeAttempt(Exception exception)
+    {
+        lock (_lifecycleGate)
+        {
+            _disposeCompletion.TrySetException(exception);
+            Volatile.Write(ref _disposed, 0);
+            _disposeCompletion = CreateDisposeCompletion();
+        }
+    }
+
+    private static TaskCompletionSource<object?> CreateDisposeCompletion() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private unsafe void ConnectCore(string path)
     {

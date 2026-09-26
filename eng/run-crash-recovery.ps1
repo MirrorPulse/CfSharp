@@ -17,6 +17,7 @@ try {
     & dotnet test $testProject `
         --configuration $Configuration `
         --no-restore `
+        -p:TargetPlatformDisplayName=Windows `
         --filter 'FullyQualifiedName~AbruptProcessExitPreservesOnlyDurableWritesAcrossWalRecovery' `
         --logger 'trx;LogFileName=crash-recovery.trx'
     if ($LASTEXITCODE -ne 0) {

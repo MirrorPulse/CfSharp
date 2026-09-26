@@ -16,6 +16,20 @@ if (-not (Test-Path -LiteralPath $project -PathType Leaf))
 
 New-Item -ItemType Directory -Force -Path $publishRoot | Out-Null
 
+# Native AOT on Windows locates the MSVC toolchain through vswhere. Hosted runners usually
+# expose it on PATH, while developer machines often install it only in the Visual Studio
+# Installer directory. Add the standard location when necessary so this verifier is reproducible
+# in a detached checkout and on ordinary local machines.
+if (-not (Get-Command vswhere.exe -ErrorAction SilentlyContinue))
+{
+    $installerDirectory = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
+    $vswherePath = Join-Path $installerDirectory "vswhere.exe"
+    if (Test-Path -LiteralPath $vswherePath -PathType Leaf)
+    {
+        $env:Path = "$installerDirectory;$env:Path"
+    }
+}
+
 function Invoke-SamplePublish
 {
     param(

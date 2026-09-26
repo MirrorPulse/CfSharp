@@ -218,9 +218,12 @@ foreach ($package in @($packages.Values | Sort-Object id, version))
     $spdxPackages.Add($spdxPackage)
 }
 
-$commit = ((& git -C $repoRoot rev-parse HEAD 2>$null) | Select-Object -First 1).ToString().Trim()
-$branch = ((& git -C $repoRoot branch --show-current 2>$null) | Select-Object -First 1).ToString().Trim()
-$sdkVersion = ((& dotnet --version 2>$null) | Select-Object -First 1).ToString().Trim()
+$commitOutput = ((& git -C $repoRoot rev-parse HEAD 2>$null) | Select-Object -First 1)
+$branchOutput = ((& git -C $repoRoot branch --show-current 2>$null) | Select-Object -First 1)
+$sdkOutput = ((& dotnet --version 2>$null) | Select-Object -First 1)
+$commit = if ($null -eq $commitOutput) { "unknown" } else { $commitOutput.ToString().Trim() }
+$branch = if ([string]::IsNullOrWhiteSpace([string]$branchOutput)) { "(detached)" } else { $branchOutput.ToString().Trim() }
+$sdkVersion = if ($null -eq $sdkOutput) { "unknown" } else { $sdkOutput.ToString().Trim() }
 $generatedAt = [DateTimeOffset]::UtcNow.ToString("O")
 $rootSpdxId = "SPDXRef-CfSharpSource"
 $relationships = [System.Collections.Generic.List[object]]::new()

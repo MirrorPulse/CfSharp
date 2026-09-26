@@ -593,6 +593,66 @@ internal sealed class SqlitePathHandleLease : IDisposable
         }
     }
 
+    /// <summary>
+    /// Resolves a directory through a kernel handle so aliases such as 8.3 short names are
+    /// expanded before the sync-root containment check.
+    /// </summary>
+    internal static string ResolveFinalDirectoryPath(string directoryPath)
+    {
+        SafeFileHandle handle = CreateFileW(
+            directoryPath,
+            FileReadAttributes,
+            FileShareRead | FileShareWrite,
+            IntPtr.Zero,
+            OpenExisting,
+            FileFlagBackupSemantics,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new IOException(
+                $"The SQLite directory '{directoryPath}' could not be resolved through a handle.",
+                new Win32Exception(error));
+        }
+
+        using (handle)
+        {
+            char[] buffer = new char[260];
+            while (true)
+            {
+                uint length = GetFinalPathNameByHandleW(
+                    handle,
+                    buffer,
+                    checked((uint)buffer.Length),
+                    volumeNameDos: 0);
+                if (length == 0)
+                {
+                    throw new IOException(
+                        $"The SQLite directory '{directoryPath}' could not be canonicalized.",
+                        new Win32Exception(Marshal.GetLastWin32Error()));
+                }
+
+                if (length < buffer.Length - 1)
+                {
+                    string finalPath = new(buffer, 0, checked((int)length));
+                    if (finalPath.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        finalPath = @"\\" + finalPath[8..];
+                    }
+                    else if (finalPath.StartsWith(@"\\?\", StringComparison.Ordinal))
+                    {
+                        finalPath = finalPath[4..];
+                    }
+
+                    return Path.TrimEndingDirectorySeparator(Path.GetFullPath(finalPath));
+                }
+
+                Array.Resize(ref buffer, checked((int)length + 1));
+            }
+        }
+    }
+
     public void Dispose()
     {
         for (int index = _handles.Count - 1; index >= 0; index--)
@@ -666,6 +726,13 @@ internal sealed class SqlitePathHandleLease : IDisposable
         int fileInformationClass,
         nint fileInformation,
         uint bufferSize);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        SafeFileHandle file,
+        [Out] char[] filePath,
+        uint filePathLength,
+        uint volumeNameDos);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct FileAttributeTagInfo
@@ -1333,6 +1400,13 @@ internal static class SqlitePathSafety
         }
 
         string resolvedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
+        if (Directory.Exists(resolvedDirectory))
+        {
+            // Path.GetFullPath preserves an 8.3 alias. A final path obtained from a directory
+            // handle is the kernel's canonical spelling and therefore closes that gap.
+            resolvedDirectory = SqlitePathHandleLease.ResolveFinalDirectoryPath(resolvedDirectory);
+        }
+
         return isDirectory
             ? resolvedDirectory
             : Path.Combine(resolvedDirectory, Path.GetFileName(fullPath));

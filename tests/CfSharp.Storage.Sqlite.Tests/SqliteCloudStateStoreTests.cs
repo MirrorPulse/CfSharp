@@ -1,5 +1,8 @@
+using System.Runtime.InteropServices;
+
 using CfSharp.Tests.Persistence;
 using Microsoft.Data.Sqlite;
+using Xunit.Sdk;
 
 namespace CfSharp.Storage.Sqlite.Tests;
 
@@ -102,6 +105,25 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     {
         SqliteCloudStateStoreFactory factory = new(
             Path.Combine(_syncRootPath, "state", "cfsharp.db"));
+
+        SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await factory.OpenAsync(CreateContext()));
+
+        Assert.Equal(SqliteCloudStateStoreError.PathInsideSyncRoot, exception.Error);
+    }
+
+    [Fact]
+    public async Task DatabaseInsideSyncRootViaShortNameIsRejected()
+    {
+        string shortRoot = GetShortPath(_syncRootPath);
+        if (string.Equals(shortRoot, _syncRootPath, StringComparison.OrdinalIgnoreCase))
+        {
+            throw SkipException.ForSkip("The test volume does not expose an 8.3 short name.");
+        }
+
+        SqliteCloudStateStoreFactory factory = new(
+            Path.Combine(shortRoot, "short-state", "cfsharp.db"));
 
         SqliteCloudStateStoreException exception = await Assert.ThrowsAsync<
             SqliteCloudStateStoreException>(async () =>
@@ -557,6 +579,34 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         object? value = await command.ExecuteScalarAsync();
         return Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    private static string GetShortPath(string path)
+    {
+        char[] buffer = new char[260];
+        while (true)
+        {
+            uint length = GetShortPathName(path, buffer, checked((uint)buffer.Length));
+            if (length == 0)
+            {
+                throw new IOException(
+                    $"GetShortPathName failed for '{path}' with Win32 error " +
+                    $"{Marshal.GetLastWin32Error()}.");
+            }
+
+            if (length < buffer.Length - 1)
+            {
+                return new string(buffer, 0, checked((int)length));
+            }
+
+            Array.Resize(ref buffer, checked((int)length + 1));
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(
+        string longPath,
+        [Out] char[] shortPath,
+        uint bufferLength);
 
     private static string CreateConnectionString(string databasePath) =>
         new SqliteConnectionStringBuilder

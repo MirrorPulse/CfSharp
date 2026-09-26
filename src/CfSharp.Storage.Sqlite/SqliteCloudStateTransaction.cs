@@ -139,9 +139,13 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
 
         if (rollbackFailure is not null)
         {
-            throw SqliteSchema.TranslateFailure(
+            // DisposeAsync is commonly running while another exception is already unwinding
+            // an await-using scope. Do not mask that business failure with best-effort rollback
+            // or connection cleanup diagnostics; explicit RollbackAsync remains available when
+            // callers need a surfaced rollback result.
+            Trace.TraceError(
+                "CfSharp SQLite transaction disposal cleanup failed for '{0}': {1}",
                 _databasePath,
-                "The SQLite state transaction could not be disposed cleanly.",
                 rollbackFailure);
         }
     }

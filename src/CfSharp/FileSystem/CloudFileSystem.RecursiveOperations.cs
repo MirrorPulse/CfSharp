@@ -274,7 +274,7 @@ public sealed partial class CloudFileSystem
                 : CloudItemKind.File;
             bool isLink = IsFileSystemLink(visit.FullPath, kind, attributes);
             RecursiveItemEntry current = new(visit.FullPath, visit.RelativePath, kind, isLink);
-            if (visit.PostVisit || !childrenFirst || kind is CloudItemKind.File)
+            if (visit.PostVisit || !childrenFirst || kind is CloudItemKind.File || isLink)
             {
                 if (visit.IncludeCurrent)
                 {

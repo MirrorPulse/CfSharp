@@ -28,6 +28,18 @@ jobs:
       - name: Restore
         run: dotnet restore CfSharp.sln
 
+      - name: Verify dependency audit and provenance
+        shell: pwsh
+        run: ./eng/verify-dependency-audit.ps1
+
+      - name: Upload dependency audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: artifacts/dependency-audit/**
+          if-no-files-found: error
+
       - name: Verify formatting
         run: dotnet format CfSharp.sln --verify-no-changes --no-restore
 

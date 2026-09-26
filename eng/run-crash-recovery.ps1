@@ -25,6 +25,15 @@ try {
         throw "Crash recovery matrix failed with exit code $LASTEXITCODE."
     }
 
+    $summaryPath = Join-Path $root 'artifacts/crash-recovery/summary.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $summaryPath) | Out-Null
+    [pscustomobject]@{
+        status = 'passed'
+        iterations = $Iterations
+        commit = (git -C $root rev-parse HEAD).Trim()
+        completedUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        test = 'AbruptProcessExitPreservesOnlyDurableWritesAcrossWalRecovery'
+    } | ConvertTo-Json | Set-Content -LiteralPath $summaryPath
     Write-Output "Crash/WAL recovery matrix passed: $Iterations iteration(s)."
 }
 finally {

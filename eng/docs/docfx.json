@@ -1,0 +1,60 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../../src/CfSharp.Native/bin/Release/net10.0-windows",
+          "files": [
+            "CfSharp.Native.dll"
+          ]
+        },
+        {
+          "src": "../../src/CfSharp/bin/Release/net10.0-windows",
+          "files": [
+            "CfSharp.dll"
+          ]
+        },
+        {
+          "src": "../../src/CfSharp.Storage.Sqlite/bin/Release/net10.0-windows",
+          "files": [
+            "CfSharp.Storage.Sqlite.dll"
+          ]
+        }
+      ],
+      "dest": "../../artifacts/docs/workspace/api"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "src": "../../artifacts/docs/workspace",
+        "files": [
+          "index.md",
+          "toc.yml",
+          "articles/**.md",
+          "api/**.yml",
+          "api/**/toc.yml"
+        ]
+      }
+    ],
+    "resource": [
+      {
+        "src": "../../artifacts/docs/workspace",
+        "files": [
+          "articles/**/{*.png,*.jpg,*.jpeg,*.gif,*.svg}"
+        ]
+      }
+    ],
+    "dest": "../../artifacts/docs/cfsharp",
+    "template": [
+      "default",
+      "modern"
+    ],
+    "globalMetadata": {
+      "_appTitle": "CfSharp documentation",
+      "_appName": "CfSharp",
+      "_appFooter": "Copyright © MirrorPulse Team. Licensed under Apache-2.0.",
+      "_enableSearch": true
+    }
+  }
+}

@@ -156,6 +156,11 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         {
         }
 
+        // The handle lease intentionally creates the WAL/SHM sidecars before SQLite opens the
+        // database, closing the reparse-point planting window. Remove the ordinary sidecars so
+        // this test can replace the WAL path with the malicious link it is meant to reject.
+        File.Delete(_databasePath + "-wal");
+        File.Delete(_databasePath + "-shm");
         string target = Path.Combine(_temporaryDirectory, "wal-target");
         await File.WriteAllTextAsync(target, "sidecar target");
         _sidecarLinkPath = _databasePath + "-wal";

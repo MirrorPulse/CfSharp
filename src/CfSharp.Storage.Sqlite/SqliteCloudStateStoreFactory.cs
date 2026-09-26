@@ -338,7 +338,10 @@ public sealed class SqliteCloudStateStoreFactory : ICloudStateStoreFactory
             Cache = SqliteCacheMode.Private,
             Pooling = true,
             ForeignKeys = true,
-            DefaultTimeout = checked((int)Math.Ceiling(BusyTimeout.TotalSeconds)),
+            // SQLite's busy_timeout controls lock waits. Do not reuse it as Microsoft.Data.Sqlite's
+            // command timeout: schema checks and large subtree reads must not be interrupted merely
+            // because they outlive the lock-wait budget.
+            DefaultTimeout = 0,
         };
         return builder.ToString();
     }
@@ -544,6 +547,36 @@ internal sealed class SqlitePathHandleLease : IDisposable
             {
                 EnsureNotReparsePoint(database, fullDatabasePath);
                 handles.Add(database);
+                foreach (string sidecarPath in new[] { fullDatabasePath + "-wal", fullDatabasePath + "-shm" })
+                {
+                    SafeFileHandle sidecar = CreateFileW(
+                        sidecarPath,
+                        GenericRead | GenericWrite,
+                        FileShareRead | FileShareWrite,
+                        IntPtr.Zero,
+                        OpenAlways,
+                        FileFlagOpenReparsePoint | FileFlagWriteThrough,
+                        IntPtr.Zero);
+                    if (sidecar.IsInvalid)
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        sidecar.Dispose();
+                        throw new IOException(
+                            $"The SQLite sidecar '{sidecarPath}' could not be opened without delete sharing.",
+                            new Win32Exception(error));
+                    }
+
+                    try
+                    {
+                        EnsureNotReparsePoint(sidecar, sidecarPath);
+                        handles.Add(sidecar);
+                    }
+                    catch
+                    {
+                        sidecar.Dispose();
+                        throw;
+                    }
+                }
             }
             catch
             {

@@ -1827,10 +1827,11 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
                     entryResults[index] = entries[index].Result;
                 }
 
-                ValidatePlaceholderTransferResults(
+                ValidatePlaceholderTransferResultsOrReleaseTerminalClaim(
                     entryResults,
                     parameters.TransferPlaceholders.EntriesProcessed,
-                    request.Request.NormalizedPath);
+                    request.Request.NormalizedPath,
+                    request.ReleaseTerminalClaim);
             }
         }
         finally
@@ -1870,6 +1871,24 @@ public sealed class CloudProviderSession : IDisposable, IAsyncDisposable
         {
             throw new InvalidDataException(
                 $"Windows processed {entriesProcessed} of {entryResults.Length} placeholder entries.");
+        }
+    }
+
+    internal static void ValidatePlaceholderTransferResultsOrReleaseTerminalClaim(
+        ReadOnlySpan<int> entryResults,
+        uint entriesProcessed,
+        string? path,
+        Action releaseTerminalClaim)
+    {
+        ArgumentNullException.ThrowIfNull(releaseTerminalClaim);
+        try
+        {
+            ValidatePlaceholderTransferResults(entryResults, entriesProcessed, path);
+        }
+        catch
+        {
+            releaseTerminalClaim();
+            throw;
         }
     }
 

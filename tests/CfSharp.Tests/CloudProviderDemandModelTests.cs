@@ -168,4 +168,20 @@ public sealed class CloudProviderDemandModelTests
         Assert.Throws<InvalidDataException>(() =>
             CloudProviderSession.ValidatePlaceholderTransferResults([0], 2, "root"));
     }
+
+    [Fact]
+    [SupportedOSPlatform("windows10.0.16299")]
+    public void PlaceholderTransferValidationReleasesTerminalClaimOnFailure()
+    {
+        bool released = false;
+
+        Assert.Throws<InvalidDataException>(() =>
+            CloudProviderSession.ValidatePlaceholderTransferResultsOrReleaseTerminalClaim(
+                [0],
+                2,
+                "root",
+                () => released = true));
+
+        Assert.True(released);
+    }
 }

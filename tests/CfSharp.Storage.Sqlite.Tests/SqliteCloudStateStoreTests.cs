@@ -451,6 +451,73 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
         await transaction.RollbackAsync();
     }
 
+    [Fact]
+    public async Task InvalidPersistedEnumValuesAreReportedAsInvalidSchema()
+    {
+        await using (ICloudStateStore store = await CreateFactory().OpenAsync(CreateContext()))
+        {
+        }
+
+        await ExecuteSqlAsync(
+            _databasePath,
+            """
+            INSERT INTO items(
+                item_id, remote_id, relative_path, kind, remote_revision,
+                local_file_id, is_tombstone, updated_at_ticks)
+            VALUES('00000000-0000-0000-0000-000000000101', 'remote-invalid-enum',
+                   'invalid-enum-item.txt', 999, NULL, NULL, 0, 0);
+            INSERT INTO operations(
+                operation_id, kind, item_id, payload, created_at_ticks,
+                attempt_count, retry_after_ticks)
+            VALUES('00000000-0000-0000-0000-000000000102', 999, NULL, X'', 0, 0, NULL);
+            INSERT INTO conflicts(
+                conflict_id, item_id, kind, payload, created_at_ticks)
+            VALUES('00000000-0000-0000-0000-000000000103', NULL, 999, X'', 0);
+            INSERT INTO remote_batches(
+                batch_id, cursor, applied_entry_count, total_entry_count,
+                status, payload, fingerprint, last_change_id, updated_at_ticks)
+            VALUES('invalid-enum-batch', X'', 0, 0, 999, X'', X'', NULL, 0);
+            INSERT INTO echo_suppressions(
+                suppression_id, item_id, kind, relative_path, previous_relative_path,
+                payload, expires_at_ticks, remaining_observations)
+            VALUES('00000000-0000-0000-0000-000000000104', NULL, 999,
+                   'invalid-enum-echo.txt', NULL, X'', 0, 1);
+            """);
+
+        await using ICloudStateStore reopened = await CreateFactory().OpenAsync(CreateContext());
+        await using ICloudStateTransaction transaction = await reopened.BeginTransactionAsync();
+
+        SqliteCloudStateStoreException itemException = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await transaction.Items.GetByRemoteIdAsync("remote-invalid-enum"));
+        Assert.Equal(SqliteCloudStateStoreError.InvalidSchema, itemException.Error);
+
+        SqliteCloudStateStoreException operationException = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await transaction.Operations.GetAsync(
+                    Guid.Parse("00000000-0000-0000-0000-000000000102")));
+        Assert.Equal(SqliteCloudStateStoreError.InvalidSchema, operationException.Error);
+
+        SqliteCloudStateStoreException conflictException = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await transaction.Conflicts.GetAsync(
+                    Guid.Parse("00000000-0000-0000-0000-000000000103")));
+        Assert.Equal(SqliteCloudStateStoreError.InvalidSchema, conflictException.Error);
+
+        SqliteCloudStateStoreException batchException = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await transaction.RemoteBatches.GetAsync("invalid-enum-batch"));
+        Assert.Equal(SqliteCloudStateStoreError.InvalidSchema, batchException.Error);
+
+        SqliteCloudStateStoreException suppressionException = await Assert.ThrowsAsync<
+            SqliteCloudStateStoreException>(async () =>
+                await transaction.EchoSuppressions.GetAsync(
+                    Guid.Parse("00000000-0000-0000-0000-000000000104")));
+        Assert.Equal(SqliteCloudStateStoreError.InvalidSchema, suppressionException.Error);
+
+        await transaction.RollbackAsync();
+    }
+
     private static async Task ExecuteSqlAsync(string databasePath, string sql)
     {
         string? parent = Path.GetDirectoryName(databasePath);

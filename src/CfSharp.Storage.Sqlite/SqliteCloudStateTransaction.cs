@@ -404,7 +404,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 Guid.Parse(reader.GetString(0)),
                 reader.GetString(1),
                 reader.GetString(2),
-                (CloudItemKind)reader.GetInt32(3),
+                ReadDefinedEnum<CloudItemKind>(reader.GetInt32(3), "items.kind"),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetInt64(5),
                 reader.GetInt64(6) != 0,
@@ -723,7 +723,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         private static CloudOperationJournalEntry ReadOperation(SqliteDataReader reader) =>
             new(
                 Guid.Parse(reader.GetString(0)),
-                (CloudStateOperationKind)reader.GetInt32(1),
+                ReadDefinedEnum<CloudStateOperationKind>(reader.GetInt32(1), "operations.kind"),
                 reader.IsDBNull(2) ? null : Guid.Parse(reader.GetString(2)),
                 ReadBytes(reader, 3),
                 FromUtcTicks(reader.GetInt64(4)),
@@ -836,7 +836,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
             new(
                 Guid.Parse(reader.GetString(0)),
                 reader.IsDBNull(1) ? null : Guid.Parse(reader.GetString(1)),
-                (CloudStateConflictKind)reader.GetInt32(2),
+                ReadDefinedEnum<CloudStateConflictKind>(reader.GetInt32(2), "conflicts.kind"),
                 ReadBytes(reader, 3),
                 FromUtcTicks(reader.GetInt64(4)));
     }
@@ -940,7 +940,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
                 ReadBytes(reader, 1),
                 reader.GetInt32(2),
                 reader.GetInt32(3),
-                (CloudRemoteBatchStatus)reader.GetInt32(4),
+                ReadDefinedEnum<CloudRemoteBatchStatus>(reader.GetInt32(4), "remote_batches.status"),
                 ReadBytes(reader, 5),
                 FromUtcTicks(reader.GetInt64(8)),
                 ReadBytes(reader, 6),
@@ -1083,7 +1083,7 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
             new(
                 Guid.Parse(reader.GetString(0)),
                 reader.IsDBNull(1) ? null : Guid.Parse(reader.GetString(1)),
-                 (CloudStateOperationKind)reader.GetInt32(2),
+                ReadDefinedEnum<CloudStateOperationKind>(reader.GetInt32(2), "echo_suppressions.kind"),
                  reader.GetString(3),
                  ReadBytes(reader, 5),
                  FromUtcTicks(reader.GetInt64(6)),
@@ -1111,6 +1111,19 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
 
     private static byte[] ReadBytes(SqliteDataReader reader, int ordinal) =>
         (byte[])reader.GetValue(ordinal);
+
+    private static TEnum ReadDefinedEnum<TEnum>(int value, string columnName)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(typeof(TEnum), value))
+        {
+            throw new ArgumentException(
+                $"The persisted value '{value}' is not defined for {columnName}.",
+                nameof(value));
+        }
+
+        return (TEnum)Enum.ToObject(typeof(TEnum), value);
+    }
 
     private static long ToUtcTicks(DateTimeOffset value) => value.UtcDateTime.Ticks;
 

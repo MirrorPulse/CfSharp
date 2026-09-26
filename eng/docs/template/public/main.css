@@ -77,6 +77,111 @@ main.container-xxl {
   padding: 0 clamp(1rem, 3vw, 3.4rem) 4rem;
 }
 
+body[data-search] > .search-results {
+  width: 100%;
+  max-width: 1500px;
+  margin-inline: auto;
+  padding-inline: clamp(1rem, 3vw, 3.4rem);
+}
+
+body[data-search] #search-results {
+  padding-bottom: 4rem;
+  color: var(--cf-ink);
+}
+
+body[data-search] #search-results > .search-list,
+body[data-search] #search-results > .sr-items,
+body[data-search] #search-results > nav {
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+}
+
+body[data-search] #search-results > .search-list {
+  margin: 0 auto;
+  padding: 1rem 0 0.8rem;
+  color: var(--cf-muted);
+  font-size: 0.95rem;
+}
+
+body[data-search] #search-results > .sr-items {
+  padding: clamp(1.2rem, 3vw, 2rem);
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius-xl);
+  background: var(--cf-surface);
+  box-shadow: var(--cf-shadow);
+  backdrop-filter: blur(24px) saturate(130%);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
+}
+
+body[data-search] #search-results .sr-item {
+  margin: 0;
+  padding: 1.2rem 0;
+  border-bottom: 1px solid var(--cf-border);
+}
+
+body[data-search] #search-results .sr-item:first-child { padding-top: 0; }
+body[data-search] #search-results .sr-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+body[data-search] #search-results .item-title {
+  font-size: 1.2rem;
+  font-weight: 720;
+}
+
+body[data-search] #search-results .item-href {
+  overflow-wrap: anywhere;
+  color: var(--cf-mint-deep);
+  font-size: 0.8rem;
+}
+
+body[data-search] #search-results .item-brief {
+  color: var(--cf-muted);
+  font-size: 0.9rem;
+}
+
+body[data-search] #search-results > nav {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.8rem;
+}
+
+body[data-search] #search-results .pagination {
+  display: flex;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+body[data-search] #search-results .page-link {
+  min-width: 2.55rem;
+  border: 1px solid var(--cf-border);
+  border-radius: 999px;
+  color: var(--cf-ink);
+  background: var(--cf-surface-strong);
+  text-align: center;
+  box-shadow: none;
+}
+
+body[data-search] #search-results .page-link:hover,
+body[data-search] #search-results .page-link:focus-visible,
+body[data-search] #search-results .page-link.active {
+  border-color: color-mix(in srgb, var(--cf-mint) 55%, var(--cf-border));
+  color: #fff;
+  background: var(--cf-mint-deep);
+}
+
+body[data-search] #search-results .page-link.disabled {
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.breadcrumb-item-label {
+  color: var(--cf-muted);
+  font-weight: 620;
+}
+
 article {
   position: relative;
   overflow: hidden;

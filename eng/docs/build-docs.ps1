@@ -116,6 +116,45 @@ try {
         throw "DocFX did not produce $outputRoot\index.html"
     }
 
+    # DocFX sees the staged integration tree rather than the repository's
+    # authored files. Rewrite contribution links back to their real sources
+    # before publishing the bundle; otherwise "Edit this page" points at the
+    # non-existent artifacts/docs/workspace tree.
+    $sourceLinkReplacements = @(
+        @{
+            Old = 'https://github.com/MirrorPulse/CfSharp/blob/main/artifacts/docs/workspace/index.md/#L'
+            New = 'https://github.com/MirrorPulse/CfSharp/blob/main/README.md#L'
+        },
+        @{
+            Old = 'https://github.com/MirrorPulse/CfSharp/blob/main/artifacts/docs/workspace/articles/'
+            New = 'https://github.com/MirrorPulse/CfSharp/blob/main/docs/'
+        }
+    )
+
+    foreach ($htmlFile in Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Filter '*.html') {
+        $htmlText = Get-Content -LiteralPath $htmlFile.FullName -Raw
+        $rewritten = $htmlText
+        foreach ($replacement in $sourceLinkReplacements) {
+            $rewritten = $rewritten.Replace($replacement.Old, $replacement.New)
+        }
+        $rewritten = $rewritten.Replace('.md/#L', '.md#L')
+
+        # The modern template does not load a custom public/main.js by itself.
+        # Load it from every generated page so breadcrumb repairs apply to
+        # pages at the root and at arbitrary nested paths alike.
+        $relativeDirectory = [System.IO.Path]::GetRelativePath($outputRoot, $htmlFile.DirectoryName).Replace('\', '/')
+        $depth = if ($relativeDirectory -eq '.') { 0 } else { ($relativeDirectory -split '/').Count }
+        $publicPrefix = if ($depth -eq 0) { './' } else { ('../' * $depth) }
+        $customScript = '      <script type="module" src="' + $publicPrefix + 'public/main.js"></script>'
+        if ($rewritten -notlike '*public/main.js*') {
+            $rewritten = $rewritten.Replace('</head>', "$customScript`r`n  </head>")
+        }
+
+        if ($rewritten -cne $htmlText) {
+            Set-Utf8File -Path $htmlFile.FullName -Value $rewritten
+        }
+    }
+
     $docfxVersion = '2.81.0'
     $fileRecords = @(
         foreach ($file in Get-ChildItem -LiteralPath $outputRoot -Recurse -File) {

@@ -36,6 +36,25 @@ foreach ($navigationMarker in @('title="Overview"', '>Guides</a>', '>API referen
     }
 }
 
+$indexHtml = Get-Content -LiteralPath (Join-Path $resolvedRoot 'index.html') -Raw
+$gettingStartedHtml = Get-Content -LiteralPath (Join-Path $resolvedRoot 'articles\getting-started.html') -Raw
+if ($indexHtml -notlike '*blob/main/README.md#L1*') {
+    throw 'The documentation home does not link Edit this page to README.md.'
+}
+if ($gettingStartedHtml -notlike '*blob/main/docs/getting-started.md#L1*') {
+    throw 'The getting-started guide does not link Edit this page to docs/getting-started.md.'
+}
+if ($indexHtml -notlike '*public/main.js*') {
+    throw 'The documentation home does not load the custom navigation script.'
+}
+
+$contributionPages = Get-ChildItem -LiteralPath $resolvedRoot -Recurse -File -Filter '*.html' |
+    ForEach-Object { [pscustomobject]@{ Path = $_.FullName; Text = Get-Content -LiteralPath $_.FullName -Raw } } |
+    Where-Object { $_.Text -like '*class="edit-link"*' }
+if ($contributionPages | Where-Object { $_.Text -like '*artifacts/docs/workspace*' }) {
+    throw 'A generated Edit this page link still exposes the staging artifacts path.'
+}
+
 $themeCss = Get-Content -LiteralPath (Join-Path $resolvedRoot 'public\main.css') -Raw
 if ($themeCss -notlike '*--cf-radius-xl*') {
     throw 'Documentation custom theme marker --cf-radius-xl is missing.'

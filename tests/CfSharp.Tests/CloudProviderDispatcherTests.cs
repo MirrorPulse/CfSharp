@@ -3,6 +3,77 @@ namespace CfSharp.Tests;
 public sealed class CloudProviderDispatcherTests
 {
     [Fact]
+    [Trait("Category", "Soak")]
+    public async Task DeterministicCallbackStormCompletesEachAcceptedItemExactlyOnce()
+    {
+        const int itemCount = 400;
+        CloudProviderSessionOptions options = new()
+        {
+            QueueCapacity = itemCount,
+            WorkerCount = 8,
+            MaxConcurrentDataRequests = 4,
+            MaxConcurrentPlaceholderRequests = 1,
+        };
+        await using CloudProviderDispatcher dispatcher = new(options);
+        int[] terminalCounts = new int[itemCount];
+        int dataStarted = 0;
+        int placeholderStarted = 0;
+        int terminalItems = 0;
+        TaskCompletionSource allTerminal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        for (int index = 0; index < itemCount; index++)
+        {
+            int itemIndex = index;
+            CloudProviderRequestKind kind = index % 5 == 0
+                ? CloudProviderRequestKind.FetchPlaceholders
+                : CloudProviderRequestKind.FetchData;
+            CloudProviderWorkItem workItem = new(
+                kind,
+                new CancellationTokenSource(),
+                async token =>
+                {
+                    if (kind == CloudProviderRequestKind.FetchData)
+                    {
+                        Interlocked.Increment(ref dataStarted);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref placeholderStarted);
+                    }
+
+                    await Task.Yield();
+                    token.ThrowIfCancellationRequested();
+                    if (itemIndex % 17 == 0)
+                    {
+                        throw new InvalidOperationException("deterministic callback storm failure");
+                    }
+
+                    RecordTerminal(itemIndex);
+                },
+                () => RecordTerminal(itemIndex),
+                _ => RecordTerminal(itemIndex));
+
+            Assert.True(dispatcher.TryEnqueue(workItem));
+        }
+
+        void RecordTerminal(int itemIndex)
+        {
+            if (Interlocked.Increment(ref terminalCounts[itemIndex]) == 1 &&
+                Interlocked.Increment(ref terminalItems) == itemCount)
+            {
+                allTerminal.TrySetResult();
+            }
+        }
+
+        await allTerminal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await dispatcher.DisposeAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(itemCount, terminalItems);
+        Assert.All(terminalCounts, count => Assert.Equal(1, count));
+        Assert.True(dataStarted > 0);
+        Assert.True(placeholderStarted > 0);
+    }
+
+    [Fact]
     public async Task BoundedQueueRejectsNewWorkAndCancelsIt()
     {
         CloudProviderSessionOptions options = new()

@@ -47,7 +47,10 @@ internal sealed class SqliteCloudStateTransaction : ICloudStateTransaction
         CheckActive(cancellationToken);
         try
         {
-            await _transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            // Once the pre-commit cancellation check passed, COMMIT must run to an
+            // unambiguous terminal point. A caller token racing this statement could otherwise
+            // report cancellation after SQLite had already committed.
+            await _transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception)
         {

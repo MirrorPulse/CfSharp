@@ -189,91 +189,51 @@ internal static class SampleProvider
         string contentRoot,
         CancellationToken cancellationToken)
     {
-        // Use a separate process for the first enumeration. Windows does not always issue a
-        // FETCH_PLACEHOLDERS callback for an enumeration initiated by the provider process
-        // itself; an external consumer reliably exercises the same shell-facing path.
-        ProcessStartInfo enumerationStartInfo = CreateEnumerationProcessStartInfo(
-            syncRootPath);
-        using (Process enumerationProcess = Process.Start(enumerationStartInfo)!)
+        // Enumerate in-process. Passing a provider-controlled path through cmd.exe would let
+        // metacharacters in a file name become shell syntax.
+        string[] placeholderFiles = Directory
+            .EnumerateFiles(syncRootPath, "*", SearchOption.AllDirectories)
+            .Select(path => SamplePathSafety.ResolveSyncRootCallbackPath(syncRootPath, path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (placeholderFiles.Length == 0)
         {
-            Task<string> outputTask = enumerationProcess.StandardOutput.ReadToEndAsync(
-                CancellationToken.None);
-            Task<string> errorTask = enumerationProcess.StandardError.ReadToEndAsync(
-                CancellationToken.None);
-            await enumerationProcess.WaitForExitAsync(cancellationToken);
-            string output = await outputTask;
-            string error = await errorTask;
-            if (enumerationProcess.ExitCode != 0)
-            {
-                throw new InvalidOperationException(
-                    $"The external sync-root enumeration failed with exit code " +
-                    $"{enumerationProcess.ExitCode}: {error}");
-            }
-
-            string[] placeholderFiles = output
-                .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
-                .Select(path => SamplePathSafety.ResolveSyncRootCallbackPath(syncRootPath, path))
-                .Where(File.Exists)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (placeholderFiles.Length == 0)
-            {
-                throw new InvalidOperationException(
-                    "The external sync-root enumeration returned no files; the sample self-check " +
-                    "cannot report a successful hydration run for an empty result.");
-            }
-
-            // Descendant enumeration repeats this for every partial directory and exercises the
-            // continuation-token path without requiring the sample to pre-materialize the tree.
-            List<Task> externalReads = [];
-            foreach (string placeholderFile in placeholderFiles.Take(4))
-            {
-                string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
-                string sourcePath = SamplePathSafety.ResolveContainedPath(
-                    contentRoot,
-                    Path.Combine(contentRoot, relativePath));
-                FileInfo sourceInfo = new(sourcePath);
-                if (sourceInfo.Length == 0)
-                {
-                    continue;
-                }
-
-                externalReads.Add(VerifyExternalContentAsync(
-                    placeholderFile,
-                    sourcePath,
-                    cancellationToken));
-            }
-
-            if (externalReads.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    "The external sync-root enumeration returned no non-empty files for the " +
-                    "concurrent hydration self-check.");
-            }
-
-            await Task.WhenAll(externalReads);
-            Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
-            Console.WriteLine($"Concurrent external hydrations verified: {externalReads.Count}");
+            throw new InvalidOperationException(
+                "The sync-root enumeration returned no files; the sample self-check cannot " +
+                "report a successful hydration run for an empty result.");
         }
-    }
 
-    internal static ProcessStartInfo CreateEnumerationProcessStartInfo(string syncRootPath)
-    {
-        ProcessStartInfo startInfo = new()
+        // Descendant enumeration repeats this for every partial directory and exercises the
+        // continuation-token path without requiring the sample to pre-materialize the tree.
+        List<Task> externalReads = [];
+        foreach (string placeholderFile in placeholderFiles.Take(4))
         {
-            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        startInfo.ArgumentList.Add("/d");
-        startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add("dir");
-        startInfo.ArgumentList.Add("/s");
-        startInfo.ArgumentList.Add("/b");
-        startInfo.ArgumentList.Add(syncRootPath);
-        return startInfo;
+            string relativePath = Path.GetRelativePath(syncRootPath, placeholderFile);
+            string sourcePath = SamplePathSafety.ResolveContainedPath(
+                contentRoot,
+                Path.Combine(contentRoot, relativePath));
+            FileInfo sourceInfo = new(sourcePath);
+            if (sourceInfo.Length == 0)
+            {
+                continue;
+            }
+
+            externalReads.Add(VerifyExternalContentAsync(
+                placeholderFile,
+                sourcePath,
+                cancellationToken));
+        }
+
+        if (externalReads.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The sync-root enumeration returned no non-empty files for the concurrent " +
+                "hydration self-check.");
+        }
+
+        await Task.WhenAll(externalReads);
+        Console.WriteLine($"Populated placeholders: {placeholderFiles.Length}");
+        Console.WriteLine($"Concurrent external hydrations verified: {externalReads.Count}");
     }
 
     internal static async Task VerifyExternalContentAsync(
@@ -315,15 +275,14 @@ internal static class SampleProvider
     {
         ProcessStartInfo startInfo = new()
         {
-            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            // Start fc.exe directly. ArgumentList is safe for the executable and does not pass
+            // file names through cmd.exe's metacharacter grammar.
+            FileName = Path.Combine(Environment.SystemDirectory, "fc.exe"),
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        startInfo.ArgumentList.Add("/d");
-        startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add("fc");
         startInfo.ArgumentList.Add("/b");
         startInfo.ArgumentList.Add("/offline");
         startInfo.ArgumentList.Add(sourcePath);

@@ -66,48 +66,43 @@ public sealed class SamplePathSafetyTests
     }
 
     [Fact]
-    public void EnumerationProcessArgumentsAreBuiltBeforeTheProcessStarts()
-    {
-        ProcessStartInfo startInfo = global::SampleProvider.CreateEnumerationProcessStartInfo(
-            @"C:\CfSharpAcceptance\sync-root");
-
-        Assert.False(startInfo.UseShellExecute);
-        Assert.True(startInfo.RedirectStandardOutput);
-        Assert.True(startInfo.RedirectStandardError);
-        Assert.Equal(
-            [
-                "/d",
-                "/c",
-                "dir",
-                "/s",
-                "/b",
-                @"C:\CfSharpAcceptance\sync-root",
-            ],
-            startInfo.ArgumentList);
-    }
-
-    [Fact]
     public void ContentComparisonRunsInAnIndependentSystemProcess()
     {
         ProcessStartInfo startInfo = global::SampleProvider.CreateContentComparisonProcessStartInfo(
             @"C:\Sample\content\source.bin",
             @"C:\Sample\sync-root\source.bin");
 
-        Assert.Equal(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", startInfo.FileName);
+        Assert.Equal(
+            Path.Combine(Environment.SystemDirectory, "fc.exe"),
+            startInfo.FileName,
+            ignoreCase: true);
         Assert.False(startInfo.UseShellExecute);
         Assert.True(startInfo.RedirectStandardOutput);
         Assert.True(startInfo.RedirectStandardError);
         Assert.Equal(
             [
-                "/d",
-                "/c",
-                "fc",
                 "/b",
                 "/offline",
                 @"C:\Sample\content\source.bin",
                 @"C:\Sample\sync-root\source.bin",
             ],
             startInfo.ArgumentList);
+    }
+
+    [Fact]
+    public async Task ContentComparisonTreatsShellMetacharactersAsFileNames()
+    {
+        using TemporaryDirectory root = new();
+        string source = Path.Combine(root.Path, "a&b.txt");
+        string placeholder = Path.Combine(root.Path, "copy&b.txt");
+        await File.WriteAllTextAsync(source, "same");
+        await File.WriteAllTextAsync(placeholder, "same");
+
+        using Process comparison = Process.Start(
+            global::SampleProvider.CreateContentComparisonProcessStartInfo(source, placeholder))!;
+        await comparison.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, comparison.ExitCode);
     }
 
     [Fact]

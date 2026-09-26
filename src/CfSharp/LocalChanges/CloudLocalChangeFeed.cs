@@ -657,8 +657,11 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             return;
         }
 
-        IReadOnlyList<CloudOperationJournalEntry> pendingOperations = await transaction.Operations
-            .ListAsync(4096, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<CloudOperationJournalEntry> pendingOperations = observedState is not null
+            ? await transaction.Operations
+                .ListByItemIdAsync(observedState.ItemId, int.MaxValue, cancellationToken)
+                .ConfigureAwait(false)
+            : await transaction.Operations.ListAsync(4096, cancellationToken).ConfigureAwait(false);
         bool alreadyPending = pendingOperations.Any(operation =>
         {
             bool compatibleKind = operation.Kind == operationKind ||

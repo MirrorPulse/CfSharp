@@ -38,6 +38,14 @@ jobs:
         shell: pwsh
         run: ./eng/verify-runtime-boundaries.ps1
 
+      - name: Upload runtime boundary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-boundaries
+          path: artifacts/runtime-boundaries/**
+          if-no-files-found: error
+
       - name: Test
         run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 

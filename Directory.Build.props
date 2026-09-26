@@ -15,6 +15,9 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/MirrorPulse/CfSharp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/MirrorPulse/CfSharp</PackageProjectUrl>
+    <RepositoryCommit Condition="'$(RepositoryCommit)' == '' and '$(SourceRevisionId)' != ''">$(SourceRevisionId)</RepositoryCommit>
     <VersionPrefix>0.1.0</VersionPrefix>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetAudit>true</NuGetAudit>

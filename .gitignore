@@ -31,6 +31,9 @@ coverage.xml
 .env
 .env.*
 !.env.example
+*.snk
+*.pfx
+*.p12
 
 # Temporary files and logs
 *.log

@@ -134,7 +134,7 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
             expectedObservationCount: 2);
         await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
         await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
-        await Task.Delay(100);
+        await WaitForJournalStateAsync(store, expectedOperations: 0, expectedSuppressions: 0);
 
         await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
         {
@@ -144,7 +144,7 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
         }
 
         await source.EmitAsync(new(LocalChangeSourceAction.Modified, "replayed.txt"));
-        await Task.Delay(100);
+        await WaitForJournalStateAsync(store, expectedOperations: 1, expectedSuppressions: 0);
         await using (ICloudStateTransaction afterBudget = await store.BeginTransactionAsync())
         {
             Assert.Single(await afterBudget.Operations.ListAsync(10));
@@ -158,12 +158,37 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
             "kind-sensitive.txt",
             DateTimeOffset.UtcNow.AddMinutes(1));
         await source.EmitAsync(new(LocalChangeSourceAction.Created, "kind-sensitive.txt"));
-        await Task.Delay(100);
+        await WaitForJournalStateAsync(store, expectedOperations: 1, expectedSuppressions: 1);
         await using ICloudStateTransaction kindMismatch = await store.BeginTransactionAsync();
         CloudOperationJournalEntry kindSensitiveOperation = Assert.Single(
             await kindMismatch.Operations.ListAsync(10));
         Assert.Equal(CloudStateOperationKind.Create, kindSensitiveOperation.Kind);
         await kindMismatch.RollbackAsync();
+    }
+
+    private static async Task WaitForJournalStateAsync(
+        ICloudStateStore store,
+        int expectedOperations,
+        int expectedSuppressions)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using ICloudStateTransaction transaction = await store.BeginTransactionAsync();
+            int operationCount = (await transaction.Operations.ListAsync(10)).Count;
+            int suppressionCount = (await transaction.EchoSuppressions
+                .ListActiveAsync(DateTimeOffset.UtcNow)).Count;
+            await transaction.RollbackAsync();
+            if (operationCount == expectedOperations && suppressionCount == expectedSuppressions)
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.Fail(
+            $"Timed out waiting for journal state operations={expectedOperations}, suppressions={expectedSuppressions}.");
     }
 
     [Fact]

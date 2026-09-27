@@ -35,7 +35,7 @@ try {
         --filter 'Category=LongSoak' `
         --logger 'trx;LogFileName=long-soak.trx' `
         --results-directory $output `
-        --blame-hang-timeout 2m
+        --blame-hang-timeout "$($DurationMinutes + 5)m"
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         throw "Long-soak test failed with exit code $exitCode."

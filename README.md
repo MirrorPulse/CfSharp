@@ -9,8 +9,9 @@ idiomatic C# API. It keeps the complete Windows Cloud Files surface reachable wh
 of native structure layout, callback lifetime, cancellation, durable coordination, and failure
 translation.
 
-> **Development preview:** CfSharp is under active development. Packages have not been released
-> to NuGet yet. Build from source while the first preview is being prepared.
+> **Preview channel:** CfSharp preview packages are published from `develop` by the manually
+> triggered Preview release workflow. Stable `1.0.0` is reserved for the protected `main` release
+> path.
 
 ## What is included
 
@@ -101,8 +102,11 @@ does not unregister the persistent Windows sync-root registration. Call
 - [Platform support](docs/platform-support.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
-The generated API reference will be published with the documentation site at
-`https://mirrorpulse.github.io/cfsharp/` when the first preview documentation pipeline is enabled.
+The generated API reference is published with the documentation site at
+`https://mirrorpulse.github.io/cfsharp/`.
+
+Release automation, NuGet trusted publishing, version calculation, and branch rules are described in
+the [release and branch model](docs/releasing.md).
 
 ## Development notes
 

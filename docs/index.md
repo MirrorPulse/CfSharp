@@ -17,6 +17,7 @@ working directly with `cfapi.h` and `CldApi.dll`.
 | Choose and protect durable state | [SQLite state](state-store-sqlite.md) |
 | Check OS and architecture support | [Platform support](platform-support.md) |
 | Diagnose a failed operation | [Troubleshooting](troubleshooting.md) |
+| Understand branches and releases | [Release and branch model](releasing.md) |
 
 ## API reference
 

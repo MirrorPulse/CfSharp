@@ -1,7 +1,8 @@
 # Installation and prerequisites
 
-The first CfSharp preview is built from source while package publication is being prepared. This
-page records the runtime assumptions that an application must satisfy.
+CfSharp preview packages are published from the protected release workflow. This page records the
+runtime assumptions that an application must satisfy; stable `1.0.0` compatibility is reserved for
+the protected `main` release path.
 
 ## Supported runtime
 

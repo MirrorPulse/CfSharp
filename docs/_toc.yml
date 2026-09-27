@@ -26,5 +26,7 @@
       href: troubleshooting.md
     - name: Contributing
       href: contributing.md
+    - name: Release and branch model
+      href: releasing.md
 - name: API reference
   href: api/index.md

@@ -67,6 +67,37 @@ header.bg-body {
   letter-spacing: -0.04em;
 }
 
+.cf-github-link {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  margin-inline: 0.3rem 0.45rem;
+  padding: 0.48rem !important;
+  border: 1px solid var(--cf-border);
+  border-radius: 999px;
+  color: var(--cf-ink) !important;
+  background: color-mix(in srgb, var(--cf-surface-strong) 72%, transparent);
+  box-shadow: 0 8px 20px rgba(31, 52, 78, 0.08);
+  text-decoration: none !important;
+  transition: transform 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.cf-github-link svg {
+  width: 1.12rem;
+  height: 1.12rem;
+  fill: currentColor;
+}
+
+.cf-github-link:hover,
+.cf-github-link:focus-visible {
+  color: var(--cf-mint-deep) !important;
+  background: color-mix(in srgb, var(--cf-mint) 16%, var(--cf-surface-strong));
+  transform: translateY(-1px);
+}
+
 main.container-xxl {
   max-width: 1500px;
   padding-top: 1.5rem;

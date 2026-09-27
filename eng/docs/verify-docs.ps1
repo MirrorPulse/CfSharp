@@ -59,6 +59,11 @@ $themeCss = Get-Content -LiteralPath (Join-Path $resolvedRoot 'public\main.css')
 if ($themeCss -notlike '*--cf-radius-xl*') {
     throw 'Documentation custom theme marker --cf-radius-xl is missing.'
 }
+$navigationScript = Get-Content -LiteralPath (Join-Path $resolvedRoot 'public\main.js') -Raw
+if ($navigationScript -notlike '*cf-github-link*' -or
+    $navigationScript -notlike '*https://github.com/MirrorPulse/CfSharp*') {
+    throw 'The documentation navigation is missing the CfSharp GitHub link.'
+}
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 foreach ($property in @('schemaVersion', 'project', 'sourceCommit', 'generatedAtUtc', 'generator', 'configuration', 'contentRoot', 'files')) {

@@ -34,6 +34,30 @@ public sealed class CloudFileSystemTests
     }
 
     [Fact]
+    public void OperationPathLeaseBlocksIntermediateDirectoryReplacement()
+    {
+        using TestDirectory root = new();
+        string parent = Path.Combine(root.Path, "parent");
+        string child = Path.Combine(parent, "child");
+        string target = Path.Combine(child, "item.txt");
+        string replacement = Path.Combine(root.Path, "parent-replacement");
+        Directory.CreateDirectory(child);
+
+        using CloudPathHandleLease lease = CloudPathHandleLease.OpenParentChains(
+            root.Path,
+            [target]);
+
+        Exception? exception = Record.Exception(() => Directory.Move(parent, replacement));
+
+        Assert.NotNull(exception);
+        Assert.True(
+            exception is IOException or UnauthorizedAccessException,
+            $"Expected a sharing or access failure, got {exception.GetType().Name}: {exception.Message}");
+        Assert.True(Directory.Exists(parent));
+        Assert.False(Directory.Exists(replacement));
+    }
+
+    [Fact]
     public void OperationPathLeaseRejectsAnIntermediateDirectoryLink()
     {
         using TestDirectory root = new();

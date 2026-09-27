@@ -115,6 +115,9 @@ document ownership, lifetime, thread-safety, platform requirements, failure mode
 native behavior. Changes should follow the atomic-commit and verification rules in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
+Security reports must follow [`SECURITY.md`](https://github.com/MirrorPulse/CfSharp/blob/main/SECURITY.md). Do not publish vulnerability details
+in a public issue or pull request.
+
 ```powershell
 dotnet format CfSharp.sln --verify-no-changes --no-restore
 dotnet build CfSharp.sln --configuration Release --no-restore

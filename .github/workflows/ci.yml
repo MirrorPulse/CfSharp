@@ -78,13 +78,13 @@ jobs:
         run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe&Category!=ApiBaseline&Category!=LongSoak" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 
       - name: Pack native bindings
-        run: dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build --output artifacts/packages
+        run: dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build --output artifacts/packages -p:Version=0.0.0-ci.${{ github.run_number }} -p:PackageVersion=0.0.0-ci.${{ github.run_number }}
 
       - name: Pack high-level library
-        run: dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build --output artifacts/packages
+        run: dotnet pack src/CfSharp/CfSharp.csproj --configuration Release --no-build --output artifacts/packages -p:Version=0.0.0-ci.${{ github.run_number }} -p:PackageVersion=0.0.0-ci.${{ github.run_number }}
 
       - name: Pack SQLite state provider
-        run: dotnet pack src/CfSharp.Storage.Sqlite/CfSharp.Storage.Sqlite.csproj --configuration Release --no-build --output artifacts/packages
+        run: dotnet pack src/CfSharp.Storage.Sqlite/CfSharp.Storage.Sqlite.csproj --configuration Release --no-build --output artifacts/packages -p:Version=0.0.0-ci.${{ github.run_number }} -p:PackageVersion=0.0.0-ci.${{ github.run_number }}
 
       - name: Upload test results
         if: always()

@@ -18,7 +18,8 @@
     <RepositoryUrl>https://github.com/MirrorPulse/CfSharp</RepositoryUrl>
     <PackageProjectUrl>https://github.com/MirrorPulse/CfSharp</PackageProjectUrl>
     <RepositoryCommit Condition="'$(RepositoryCommit)' == '' and '$(SourceRevisionId)' != ''">$(SourceRevisionId)</RepositoryCommit>
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <!-- Every pack workflow supplies an explicit release or CI version. -->
+    <VersionPrefix>0.0.0</VersionPrefix>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>

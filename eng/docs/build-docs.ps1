@@ -55,7 +55,7 @@ try {
     $readmeText = $readmeText.Replace('](samples/CfSharp.SampleProvider)','](https://github.com/MirrorPulse/CfSharp/tree/main/samples/CfSharp.SampleProvider)')
     $readmeText = $readmeText.Replace('](global.json)','](https://github.com/MirrorPulse/CfSharp/blob/main/global.json)')
     $readmeText = $readmeText.Replace('](CONTRIBUTING.md)','](https://github.com/MirrorPulse/CfSharp/blob/main/CONTRIBUTING.md)')
-    $readmeText = $readmeText.Replace('](SECURITY.md)','](https://github.com/MirrorPulse/CfSharp/blob/main/SECURITY.md)')
+    $readmeText = $readmeText.Replace('](SECURITY.md)','](https://github.com/MirrorPulse/CfSharp/blob/develop/SECURITY.md)')
     $readmeText = $readmeText.Replace('](LICENSE)','](https://github.com/MirrorPulse/CfSharp/blob/main/LICENSE)')
     Set-Utf8File (Join-Path $workspaceRoot 'index.md') $readmeText
 

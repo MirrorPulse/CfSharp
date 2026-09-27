@@ -1,0 +1,181 @@
+name: Stable release
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: read
+
+jobs:
+  publish-stable:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.head.repo.full_name == github.repository
+    name: publish-stable
+    runs-on: windows-2022
+    timeout-minutes: 120
+    environment: stable
+    steps:
+      - name: Check out the merge commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Resolve release label
+        id: label
+        shell: pwsh
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          $allowed = @('breaking', 'feature', 'fix')
+          $labels = @($env:LABELS -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          $releaseLabels = @($labels | Where-Object { $allowed -contains $_ })
+          if ($releaseLabels.Count -ne 1) {
+              throw "Merged main pull request must have exactly one of: $($allowed -join ', ')."
+          }
+          "bump=$($releaseLabels[0].Substring(0,1).ToUpperInvariant() + $releaseLabels[0].Substring(1))" >> $env:GITHUB_OUTPUT
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Verify platform matrix
+        shell: pwsh
+        run: ./eng/verify-platform-matrix.ps1
+
+      - name: Restore
+        run: dotnet restore CfSharp.sln
+
+      - name: Verify formatting and build
+        shell: pwsh
+        run: |
+          dotnet format CfSharp.sln --verify-no-changes --no-restore
+          dotnet build CfSharp.sln --configuration Release --no-restore
+
+      - name: Verify managed API baseline
+        shell: pwsh
+        run: ./eng/verify-api-baseline.ps1 -Configuration Release
+
+      - name: Verify runtime boundaries
+        shell: pwsh
+        run: ./eng/verify-runtime-boundaries.ps1 -Configuration Release
+
+      - name: Run release test matrix
+        shell: pwsh
+        run: dotnet test CfSharp.sln --configuration Release --no-build --no-restore --filter "Category!=AbiProbe&Category!=ApiBaseline&Category!=LongSoak" --logger "trx;LogFileName=stable-test-results.trx"
+
+      - name: Build x64 ABI probe
+        shell: pwsh
+        run: |
+          cmake -S tests/CfSharp.Native.AbiProbe -B artifacts/abi-probe/build -A x64
+          cmake --build artifacts/abi-probe/build --config Release
+          New-Item -ItemType Directory -Force artifacts/abi-probe | Out-Null
+          & artifacts/abi-probe/build/Release/CfSharp.Native.AbiProbe.exe |
+              Set-Content -Encoding utf8 artifacts/abi-probe/x64.json
+
+      - name: Verify x64 ABI
+        shell: pwsh
+        env:
+          CFSHARP_ABI_PROBE_JSON: ${{ github.workspace }}\artifacts\abi-probe\x64.json
+        run: dotnet test tests/CfSharp.Native.Tests/CfSharp.Native.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=stable-abi-results.trx"
+
+      - name: Resolve next stable version from NuGet
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_BUMP: ${{ steps.label.outputs.bump }}
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          & ./eng/resolve-nuget-version.ps1 -Channel Stable -Bump $env:RELEASE_BUMP -OutputPath artifacts/stable-version.json
+          $metadata = Get-Content -LiteralPath artifacts/stable-version.json -Raw | ConvertFrom-Json
+          "version=$($metadata.version)" >> $env:GITHUB_OUTPUT
+          "Stable version: $($metadata.version) ($env:RELEASE_BUMP)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Prepare stable package set
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: ./eng/prepare-preview.ps1 -Version $env:RELEASE_VERSION -Channel Stable
+
+      - name: Upload stable evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stable-${{ steps.version.outputs.version }}
+          path: |
+            artifacts/preview/${{ steps.version.outputs.version }}/**
+            artifacts/stable-version.json
+            artifacts/abi-probe/**
+            **/TestResults/**
+          if-no-files-found: error
+          retention-days: 365
+
+      - name: Require NuGet username configuration
+        shell: pwsh
+        env:
+          NUGET_USER: ${{ secrets.NUGET_USER }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_USER)) {
+              throw 'The NUGET_USER secret is required for NuGet trusted publishing.'
+          }
+
+      - name: Exchange GitHub OIDC token for a NuGet key
+        id: nuget-login
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish stable packages
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $packageRoot = Join-Path 'artifacts/preview' $env:RELEASE_VERSION
+          $packages = @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'packages') -Filter '*.nupkg' -File |
+              Where-Object { $_.Name -notlike '*.snupkg' })
+          if ($packages.Count -ne 3) {
+              throw "Expected three stable packages, found $($packages.Count)."
+          }
+          foreach ($package in $packages) {
+              dotnet nuget push $package.FullName --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json
+              if ($LASTEXITCODE -ne 0) {
+                  throw "NuGet push failed for $($package.Name)."
+              }
+          }
+
+      - name: Create stable tag and GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $existing = gh api "repos/${{ github.repository }}/git/ref/tags/$tag" 2>$null
+          if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existing)) {
+              throw "The release tag '$tag' already exists."
+          }
+          $releaseNotes = Join-Path 'artifacts/preview' "$env:RELEASE_VERSION/published-release-notes.md"
+          @"
+          # CfSharp $env:RELEASE_VERSION
+
+          This stable package set was built from merge commit $env:COMMIT_SHA.
+          The release label selected the semantic-version increment.
+          "@ | Set-Content -LiteralPath $releaseNotes -Encoding utf8
+          git config user.name 'MirrorPulse Release Bot'
+          git config user.email 'release-bot@mirrorpulse.github.io'
+          git tag -a $tag $env:COMMIT_SHA -m "CfSharp $env:RELEASE_VERSION"
+          git push origin $tag
+          $assetRoot = Join-Path 'artifacts/preview' $env:RELEASE_VERSION
+          $assets = @(
+              (Join-Path $assetRoot 'manifest.json'),
+              (Join-Path $assetRoot 'support-matrix.md'),
+              (Join-Path $assetRoot 'sbom.spdx.json')
+          )
+          $assets += @(Get-ChildItem -LiteralPath (Join-Path $assetRoot 'packages') -File |
+              Where-Object { $_.Extension -in @('.nupkg', '.snupkg') } |
+              Select-Object -ExpandProperty FullName)
+          gh release create $tag --title "CfSharp $env:RELEASE_VERSION" --notes-file $releaseNotes --target $env:COMMIT_SHA `
+              @assets

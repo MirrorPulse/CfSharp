@@ -281,15 +281,15 @@ $packageLines
 
 | Area | Preview policy |
 | --- | --- |
-| Target framework | `net10.0-windows` |
+| Target framework | net10.0-windows |
 | Windows baseline | Windows 10 build 16299 for core APIs |
 | Capability gates | Rich status 17134; provider progress V2 17763; placeholder management 784; restart/force convert 1280; range information 1536 |
-| Architectures | `win-x64` and `win-arm64` |
+| Architectures | win-x64 and win-arm64 |
 | x86 | Not supported |
-| Native component | `CfSharp.Native` exposes the complete Cloud Files ABI surface |
-| Durable state | `CfSharp.Storage.Sqlite` requires a caller-supplied database path outside the managed sync root |
+| Native component | CfSharp.Native exposes the complete Cloud Files ABI surface |
+| Durable state | CfSharp.Storage.Sqlite requires a caller-supplied database path outside the managed sync root |
 
-The preview is not a stable `1.0.0` compatibility promise. API, native ABI, and behavior changes remain subject to the compatibility policy before stable release.
+The preview is not a stable 1.0.0 compatibility promise. API, native ABI, and behavior changes remain subject to the compatibility policy before stable release.
 "@ | Set-Content -LiteralPath (Join-Path $versionOutput 'support-matrix.md') -Encoding utf8
 
 $packageProject = Join-Path $root 'samples/CfSharp.SampleProvider.Package/CfSharp.SampleProvider.Package.wapproj'

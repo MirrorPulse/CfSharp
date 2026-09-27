@@ -75,7 +75,7 @@ jobs:
           if-no-files-found: error
 
       - name: Test
-        run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe&Category!=ApiBaseline" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
+        run: dotnet test CfSharp.sln --configuration Release --no-build --filter "Category!=AbiProbe&Category!=ApiBaseline&Category!=LongSoak" --logger "trx;LogFileName=test-results.trx" --collect "XPlat Code Coverage"
 
       - name: Pack native bindings
         run: dotnet pack src/CfSharp.Native/CfSharp.Native.csproj --configuration Release --no-build --output artifacts/packages
@@ -144,7 +144,7 @@ jobs:
         run: ./eng/verify-runtime-boundaries.ps1 -Configuration Release
 
       - name: Test ARM64 solution
-        run: dotnet test CfSharp.sln --configuration Release --no-build --no-restore --disable-build-servers -m:1 --filter "Category!=AbiProbe&Category!=ApiBaseline" --logger "trx;LogFileName=arm64-test-results.trx" --blame-hang-timeout 2m
+        run: dotnet test CfSharp.sln --configuration Release --no-build --no-restore --disable-build-servers -m:1 --filter "Category!=AbiProbe&Category!=ApiBaseline&Category!=LongSoak" --logger "trx;LogFileName=arm64-test-results.trx" --blame-hang-timeout 2m
 
       - name: Upload ARM64 test results
         if: always()

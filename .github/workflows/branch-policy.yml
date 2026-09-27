@@ -1,0 +1,39 @@
+name: Branch policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-main-pr:
+    if: github.event.pull_request.base.ref == 'main'
+    name: validate-main-pr
+    runs-on: windows-2022
+    steps:
+      - name: Require develop as the only main source
+        shell: pwsh
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          if ($env:HEAD_BRANCH -ne 'develop' -or $env:HEAD_REPOSITORY -ne $env:BASE_REPOSITORY) {
+              throw "Pull requests into main must originate from the repository's develop branch."
+          }
+
+      - name: Require exactly one release label
+        shell: pwsh
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          $allowed = @('breaking', 'feature', 'fix')
+          $labels = @($env:LABELS -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          $releaseLabels = @($labels | Where-Object { $allowed -contains $_ })
+          if ($releaseLabels.Count -ne 1) {
+              throw "A main pull request must have exactly one of: $($allowed -join ', ')."
+          }
+          Write-Output "Release label: $($releaseLabels[0])"

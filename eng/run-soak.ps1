@@ -2,8 +2,6 @@
 param(
     [ValidateRange(1, 1440)]
     [int] $DurationMinutes = 30,
-    [ValidateRange(0, 100000)]
-    [int] $MaxIterations = 0,
     [ValidateSet('Debug', 'Release')]
     [string] $Configuration = 'Release',
     [string] $RepositoryRoot = (Join-Path $PSScriptRoot '..'),
@@ -20,58 +18,54 @@ $outputPath = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
 $output = [System.IO.Path]::GetFullPath($outputPath)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
-$deadline = [DateTimeOffset]::UtcNow.AddMinutes($DurationMinutes)
-$iteration = 0
-$firstRun = $true
-$results = [System.Collections.Generic.List[object]]::new()
+$runtimeArtifact = Join-Path $output 'runtime-soak.json'
+$runnerArtifact = Join-Path $output 'runner-summary.json'
+$savedDuration = $env:CFSHARP_SOAK_DURATION_MINUTES
+$savedArtifact = $env:CFSHARP_SOAK_ARTIFACT
+$status = 'failed'
+$exitCode = 1
+$env:CFSHARP_SOAK_DURATION_MINUTES = $DurationMinutes.ToString(
+    [System.Globalization.CultureInfo]::InvariantCulture)
+$env:CFSHARP_SOAK_ARTIFACT = $runtimeArtifact
 
 try {
-    while ([DateTimeOffset]::UtcNow -lt $deadline -and
-        ($MaxIterations -eq 0 -or $iteration -lt $MaxIterations)) {
-        $iteration++
-        $started = [DateTimeOffset]::UtcNow
-        $arguments = @(
-            'test',
-            'tests/CfSharp.Tests/CfSharp.Tests.csproj',
-            '--configuration', $Configuration,
-            '--no-restore',
-            '--filter', 'Category=Soak',
-            '--logger', "trx;LogFileName=soak-$iteration.trx",
-            '--results-directory', $output
-        )
-        if (-not $firstRun) {
-            $arguments += '--no-build'
-        }
-
-        & dotnet @arguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "Soak iteration $iteration failed with exit code $LASTEXITCODE."
-        }
-
-        $firstRun = $false
-        $finished = [DateTimeOffset]::UtcNow
-        $results.Add([pscustomobject]@{
-                iteration = $iteration
-                startedUtc = $started.ToString('O')
-                finishedUtc = $finished.ToString('O')
-                durationSeconds = [math]::Round(($finished - $started).TotalSeconds, 3)
-                status = 'passed'
-            })
-        Write-Output "Soak iteration $iteration passed."
+    & dotnet test tests/CfSharp.Tests/CfSharp.Tests.csproj `
+        --configuration $Configuration `
+        --no-restore `
+        --filter 'Category=LongSoak' `
+        --logger 'trx;LogFileName=long-soak.trx' `
+        --results-directory $output `
+        --blame-hang-timeout 2m
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "Long-soak test failed with exit code $exitCode."
     }
+
+    $status = 'passed'
+    Write-Output "Continuous long-soak completed: $DurationMinutes minute(s)."
 }
 finally {
-    $summary = [pscustomobject]@{
+    [pscustomobject]@{
+        status = $status
         durationMinutes = $DurationMinutes
-        iterations = $results.Count
+        testCategory = 'LongSoak'
+        commit = (git -C $root rev-parse HEAD).Trim()
+        runtimeArtifact = [System.IO.Path]::GetFileName($runtimeArtifact)
         completedUtc = [DateTimeOffset]::UtcNow.ToString('O')
-        results = $results
+    } | ConvertTo-Json | Set-Content -LiteralPath $runnerArtifact -Encoding utf8
+
+    if ($null -eq $savedDuration) {
+        Remove-Item Env:CFSHARP_SOAK_DURATION_MINUTES -ErrorAction SilentlyContinue
+    } else {
+        $env:CFSHARP_SOAK_DURATION_MINUTES = $savedDuration
     }
-    $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
+    if ($null -eq $savedArtifact) {
+        Remove-Item Env:CFSHARP_SOAK_ARTIFACT -ErrorAction SilentlyContinue
+    } else {
+        $env:CFSHARP_SOAK_ARTIFACT = $savedArtifact
+    }
 }
 
-if ($results.Count -eq 0) {
-    throw 'The soak completed without running an iteration.'
+if ($status -ne 'passed') {
+    throw "The continuous long-soak did not pass. See $runnerArtifact and the test results."
 }
-
-Write-Output "Soak completed: $($results.Count) iteration(s) in a $DurationMinutes-minute budget."

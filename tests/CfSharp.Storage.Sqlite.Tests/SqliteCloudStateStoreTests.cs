@@ -79,6 +79,39 @@ public sealed class SqliteCloudStateStoreTests : CloudStateStoreContractTests, I
     }
 
     [Fact]
+    public async Task DisposeReportsCleanupFailureThroughTraceWithoutThrowing()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using SqliteTransaction nativeTransaction =
+            (SqliteTransaction)await connection.BeginTransactionAsync();
+        using StringWriter traceOutput = new();
+        using TextWriterTraceListener traceListener = new(traceOutput);
+        Trace.Listeners.Add(traceListener);
+
+        try
+        {
+            await using SqliteCloudStateTransaction transaction = new(
+                connection,
+                nativeTransaction,
+                "in-memory",
+                () => throw new InvalidOperationException("test cleanup failure"));
+
+            await transaction.DisposeAsync();
+            Trace.Flush();
+
+            string diagnostics = traceOutput.ToString();
+            Assert.Contains("CfSharp SQLite transaction disposal cleanup failed", diagnostics);
+            Assert.Contains("in-memory", diagnostics);
+            Assert.Contains("test cleanup failure", diagnostics);
+        }
+        finally
+        {
+            Trace.Listeners.Remove(traceListener);
+        }
+    }
+
+    [Fact]
     public async Task AbruptProcessExitPreservesOnlyDurableWritesAcrossWalRecovery()
     {
         int iterations = ReadCrashRecoveryIterations();

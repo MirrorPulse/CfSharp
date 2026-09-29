@@ -6,7 +6,7 @@ This guide builds CfSharp from source and runs the local sample provider. It ass
 ## 1. Clone and verify the toolchain
 
 ```powershell
-git clone https://github.com/MirrorPulse/CfSharp.git
+git clone https://github.com/mirrorpulse/cfsharp.git
 cd CfSharp
 dotnet --info
 ```

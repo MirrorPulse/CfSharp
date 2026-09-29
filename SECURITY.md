@@ -14,7 +14,7 @@ against unsupported operating systems or x86 are still welcome, but may not rece
 ## Reporting a vulnerability
 
 Do not open a public issue, pull request, or discussion for an undisclosed vulnerability. Use a
-private GitHub Security Advisory for `MirrorPulse/CfSharp`. If private reporting is unavailable,
+private GitHub Security Advisory for `mirrorpulse/cfsharp`. If private reporting is unavailable,
 contact the repository maintainer privately through the GitHub account listed in
 [CODEOWNERS](.github/CODEOWNERS), and do not include exploit details in a public channel.
 

@@ -1,6 +1,6 @@
 # CfSharp
 
-[![CI](https://github.com/MirrorPulse/CfSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/MirrorPulse/CfSharp/actions/workflows/ci.yml)
+[![CI](https://github.com/mirrorpulse/cfsharp/actions/workflows/ci.yml/badge.svg)](https://github.com/mirrorpulse/cfsharp/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-84f5d3.svg)](LICENSE)
 [![Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)](docs/platform-support.md)
 
@@ -37,7 +37,7 @@ content bytes, and business conflict policy remain application-owned.
 ### Build from source
 
 ```powershell
-git clone https://github.com/MirrorPulse/CfSharp.git
+git clone https://github.com/mirrorpulse/cfsharp.git
 cd CfSharp
 dotnet restore CfSharp.sln
 dotnet build CfSharp.sln --configuration Release --no-restore
@@ -115,7 +115,7 @@ document ownership, lifetime, thread-safety, platform requirements, failure mode
 native behavior. Changes should follow the atomic-commit and verification rules in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Security reports must follow [`SECURITY.md`](https://github.com/MirrorPulse/CfSharp/blob/develop/SECURITY.md). Do not publish vulnerability details
+Security reports must follow [`SECURITY.md`](https://github.com/mirrorpulse/cfsharp/blob/develop/SECURITY.md). Do not publish vulnerability details
 in a public issue or pull request.
 
 ```powershell

@@ -52,9 +52,11 @@ try {
 
     $readmeText = Get-Content -LiteralPath (Join-Path $repoRoot 'README.md') -Raw
     $readmeText = $readmeText.Replace('](docs/','](articles/')
+<<<<<<< HEAD
     $readmeText = $readmeText.Replace('](samples/CfSharp.SampleProvider)','](https://github.com/mirrorpulse/cfsharp/tree/main/samples/CfSharp.SampleProvider)')
     $readmeText = $readmeText.Replace('](global.json)','](https://github.com/mirrorpulse/cfsharp/blob/main/global.json)')
     $readmeText = $readmeText.Replace('](CONTRIBUTING.md)','](https://github.com/mirrorpulse/cfsharp/blob/main/CONTRIBUTING.md)')
+    $readmeText = $readmeText.Replace('](SECURITY.md)','](https://github.com/mirrorpulse/cfsharp/blob/develop/SECURITY.md)')
     $readmeText = $readmeText.Replace('](LICENSE)','](https://github.com/mirrorpulse/cfsharp/blob/main/LICENSE)')
     Set-Utf8File (Join-Path $workspaceRoot 'index.md') $readmeText
 
@@ -137,6 +139,14 @@ try {
         foreach ($replacement in $sourceLinkReplacements) {
             $rewritten = $rewritten.Replace($replacement.Old, $replacement.New)
         }
+        $rewritten = [regex]::Replace(
+            $rewritten,
+            'https://github\.com/mirrorpulse/cfsharp/blob/[^/]+/artifacts/docs/workspace/index\.md/#L',
+            'https://github.com/mirrorpulse/cfsharp/blob/main/README.md#L')
+        $rewritten = [regex]::Replace(
+            $rewritten,
+            'https://github\.com/mirrorpulse/cfsharp/blob/[^/]+/artifacts/docs/workspace/articles/',
+            'https://github.com/mirrorpulse/cfsharp/blob/main/docs/')
         $rewritten = $rewritten.Replace('.md/#L', '.md#L')
 
         # The modern template does not load a custom public/main.js by itself.

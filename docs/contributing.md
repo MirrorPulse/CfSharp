@@ -8,6 +8,10 @@ CfSharp follows the repository rules in `AGENTS.md` and `CONTRIBUTING.md`. The s
 - preserve the dependency direction and explicit ownership semantics;
 - run the smallest relevant local gates, then the full CI checks required by the change.
 
+Main-bound changes must come from `develop`, pass all protected checks, and carry exactly one of
+the `breaking`, `feature`, or `fix` labels. Use private GitHub Security Advisories for
+undisclosed vulnerabilities; see the repository [security policy](https://github.com/mirrorpulse/cfsharp/blob/develop/SECURITY.md).
+
 ## Editing a guide
 
 Use sentence-case headings and direct language. Start with prerequisites and scope. Code examples
@@ -24,3 +28,7 @@ Public APIs require XML documentation covering ownership, lifetime, thread-safet
 requirements, failure modes, and relevant native behavior. The generated reference is built from
 Release assemblies and XML files, so missing comments are a documentation defect as well as an API
 quality issue.
+
+Do not edit generated files under `artifacts/`. Update source comments or guides, then run the
+DocFX build and verification scripts. Keep credentials, downloaded logs, and local research in
+the ignored `draft/` area; do not commit them.

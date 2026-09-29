@@ -39,3 +39,7 @@ acknowledge the rescan explicitly. Recursive operations never follow links or re
 Provider-originated writes can be wrapped by `SuppressProviderEchoAsync` so they do not become
 uploads. Hydration, pinning, and availability transitions are not local upload operations by
 themselves.
+
+### Acknowledging uploaded snapshots
+
+Each observed change has its own durable operation identifier, including repeated notifications for the same path. Acknowledge only the identifiers whose snapshots have completed uploading. An acknowledgement does not cover subsequent observations. Consumers must tolerate redundant uploads rather than assume pending events are coalesced.

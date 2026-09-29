@@ -126,6 +126,11 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         while (true)
         {
             ThrowIfFailed();
+            if (await RequiresCreationReconciliationAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return new CloudLocalChangeBatch([], requiresFullRescan: true);
+            }
+
             IReadOnlyList<CloudOperationJournalEntry> operations = await ListOperationsAsync(
                 cancellationToken).ConfigureAwait(false);
             if (operations.Count != 0)
@@ -239,6 +244,19 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         EnsureStarted();
         await using ICloudStateTransaction transaction = await _stateStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<CloudStateCheckpoint> creations = await transaction.Checkpoints
+            .ListAsync(RemoteCreationIntent.Prefix, cancellationToken).ConfigureAwait(false);
+        if (creations.Any(value => !RemoteCreationIntent.Decode(value.Value).Committed))
+        {
+            throw new InvalidOperationException("Replay pending remote creations before acknowledging reconciliation.");
+        }
+
+        foreach (CloudStateCheckpoint observation in await transaction.Checkpoints
+            .ListAsync(RemoteCreationIntent.ObservationsPrefix, cancellationToken).ConfigureAwait(false))
+        {
+            await transaction.Checkpoints.RemoveAsync(observation.Name, cancellationToken).ConfigureAwait(false);
+        }
+
         LocalChangeCheckpoint checkpoint = await ReadCheckpointAsync(
             transaction,
             cancellationToken).ConfigureAwait(false);
@@ -603,6 +621,27 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             .ConfigureAwait(false);
         long observation = Math.Max(_nextObservation + 1, checkpoint.Observation + 1);
         _nextObservation = observation;
+        IReadOnlyList<CloudStateCheckpoint> creations = await transaction.Checkpoints
+            .ListAsync(RemoteCreationIntent.Prefix, cancellationToken).ConfigureAwait(false);
+        bool pendingCreation = creations.Select(value => RemoteCreationIntent.Decode(value.Value)).Any(intent =>
+            !intent.Committed && (string.Equals(intent.RelativePath, path.RelativePath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(intent.RelativePath, previousPath?.RelativePath, StringComparison.OrdinalIgnoreCase)));
+        if (pendingCreation)
+        {
+            // Do not assign a local identity while native creation is uncommitted. Retain
+            // the observation durably and require reconciliation after remote replay; its
+            // origin cannot be proved solely from a path, timestamp, or notification kind.
+            LocalChangePayload uncertain = new(path.RelativePath, previousPath?.RelativePath,
+                Directory.Exists(path.FullPath), observedAt);
+            await transaction.Checkpoints.UpsertAsync(new CloudStateCheckpoint(
+                RemoteCreationIntent.ObservationsPrefix + "/" + kind + "/" + Guid.NewGuid().ToString("N"),
+                uncertain.Encode(), observedAt), cancellationToken).ConfigureAwait(false);
+            await UpsertCheckpointAsync(transaction, observation, true, observedAt, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            SignalAvailable();
+            return;
+        }
+
         CloudStateOperationKind operationKind = kind switch
         {
             CloudLocalChangeKind.Create => CloudStateOperationKind.Create,
@@ -625,11 +664,9 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
         IReadOnlyList<CloudEchoSuppressionState> suppressions = await transaction.EchoSuppressions
             .ListActiveAsync(observedAt, cancellationToken).ConfigureAwait(false);
         CloudEchoSuppressionState? suppression = suppressions.FirstOrDefault(candidate =>
-            candidate.Matches(
-                operationKind,
-                path.RelativePath,
-                previousPath?.RelativePath,
-                observedState?.ItemId));
+            RemoteCreationIntent.IsCreationEcho(candidate)
+                ? MatchesRemoteCreationEcho(candidate, operationKind, path, observedState)
+                : candidate.Matches(operationKind, path.RelativePath, previousPath?.RelativePath, observedState?.ItemId));
         if (suppression is not null)
         {
             if (suppression.RemainingObservations == 1)
@@ -720,6 +757,41 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         SignalAvailable();
+    }
+
+    private async ValueTask<bool> RequiresCreationReconciliationAsync(CancellationToken cancellationToken)
+    {
+        await using ICloudStateTransaction transaction = await _stateStore.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if ((await transaction.Checkpoints.ListAsync(RemoteCreationIntent.ObservationsPrefix, cancellationToken)
+            .ConfigureAwait(false)).Count != 0)
+        {
+            return true;
+        }
+
+        return (await transaction.Checkpoints.ListAsync(RemoteCreationIntent.Prefix, cancellationToken)
+            .ConfigureAwait(false)).Any(value => !RemoteCreationIntent.Decode(value.Value).Committed);
+    }
+
+    private static bool MatchesRemoteCreationEcho(CloudEchoSuppressionState suppression,
+        CloudStateOperationKind kind, CloudItemPath path, CloudItemState? state)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299) || state is null ||
+            kind is not (CloudStateOperationKind.Create or CloudStateOperationKind.ContentUpdate or CloudStateOperationKind.MetadataUpdate) ||
+            !string.Equals(suppression.RelativePath, path.RelativePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        CloudPlaceholderIdentity expected = RemoteCreationIntent.EchoIdentity(suppression);
+        if (state.ItemId != expected.ItemId)
+        {
+            return false;
+        }
+
+        LocalCloudItemInspection local = CloudItemInspector.Inspect(path.FullPath, state.Kind);
+        return local.Exists && local.SynchronizationState == CloudSynchronizationState.InSync &&
+            local.PlaceholderIdentity.AsSpan().SequenceEqual(expected.Encode());
     }
 
     private async ValueTask MarkRescanRequiredAsync(CancellationToken cancellationToken)

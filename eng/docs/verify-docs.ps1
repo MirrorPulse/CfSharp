@@ -61,7 +61,7 @@ if ($themeCss -notlike '*--cf-radius-xl*') {
 }
 $navigationScript = Get-Content -LiteralPath (Join-Path $resolvedRoot 'public\main.js') -Raw
 if ($navigationScript -notlike '*cf-github-link*' -or
-    $navigationScript -notlike '*https://github.com/MirrorPulse/CfSharp*') {
+    $navigationScript -notlike '*https://github.com/mirrorpulse/cfsharp*') {
     throw 'The documentation navigation is missing the CfSharp GitHub link.'
 }
 

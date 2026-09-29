@@ -52,11 +52,12 @@ try {
 
     $readmeText = Get-Content -LiteralPath (Join-Path $repoRoot 'README.md') -Raw
     $readmeText = $readmeText.Replace('](docs/','](articles/')
-    $readmeText = $readmeText.Replace('](samples/CfSharp.SampleProvider)','](https://github.com/MirrorPulse/CfSharp/tree/main/samples/CfSharp.SampleProvider)')
-    $readmeText = $readmeText.Replace('](global.json)','](https://github.com/MirrorPulse/CfSharp/blob/main/global.json)')
-    $readmeText = $readmeText.Replace('](CONTRIBUTING.md)','](https://github.com/MirrorPulse/CfSharp/blob/main/CONTRIBUTING.md)')
-    $readmeText = $readmeText.Replace('](SECURITY.md)','](https://github.com/MirrorPulse/CfSharp/blob/develop/SECURITY.md)')
-    $readmeText = $readmeText.Replace('](LICENSE)','](https://github.com/MirrorPulse/CfSharp/blob/main/LICENSE)')
+<<<<<<< HEAD
+    $readmeText = $readmeText.Replace('](samples/CfSharp.SampleProvider)','](https://github.com/mirrorpulse/cfsharp/tree/main/samples/CfSharp.SampleProvider)')
+    $readmeText = $readmeText.Replace('](global.json)','](https://github.com/mirrorpulse/cfsharp/blob/main/global.json)')
+    $readmeText = $readmeText.Replace('](CONTRIBUTING.md)','](https://github.com/mirrorpulse/cfsharp/blob/main/CONTRIBUTING.md)')
+    $readmeText = $readmeText.Replace('](SECURITY.md)','](https://github.com/mirrorpulse/cfsharp/blob/develop/SECURITY.md)')
+    $readmeText = $readmeText.Replace('](LICENSE)','](https://github.com/mirrorpulse/cfsharp/blob/main/LICENSE)')
     Set-Utf8File (Join-Path $workspaceRoot 'index.md') $readmeText
 
     $sourceDocsRoot = Join-Path $repoRoot 'docs'
@@ -123,12 +124,12 @@ try {
     # non-existent artifacts/docs/workspace tree.
     $sourceLinkReplacements = @(
         @{
-            Old = 'https://github.com/MirrorPulse/CfSharp/blob/main/artifacts/docs/workspace/index.md/#L'
-            New = 'https://github.com/MirrorPulse/CfSharp/blob/main/README.md#L'
+            Old = 'https://github.com/mirrorpulse/cfsharp/blob/main/artifacts/docs/workspace/index.md/#L'
+            New = 'https://github.com/mirrorpulse/cfsharp/blob/main/README.md#L'
         },
         @{
-            Old = 'https://github.com/MirrorPulse/CfSharp/blob/main/artifacts/docs/workspace/articles/'
-            New = 'https://github.com/MirrorPulse/CfSharp/blob/main/docs/'
+            Old = 'https://github.com/mirrorpulse/cfsharp/blob/main/artifacts/docs/workspace/articles/'
+            New = 'https://github.com/mirrorpulse/cfsharp/blob/main/docs/'
         }
     )
 
@@ -140,12 +141,12 @@ try {
         }
         $rewritten = [regex]::Replace(
             $rewritten,
-            'https://github\.com/MirrorPulse/CfSharp/blob/[^/]+/artifacts/docs/workspace/index\.md/#L',
-            'https://github.com/MirrorPulse/CfSharp/blob/main/README.md#L')
+            'https://github\.com/mirrorpulse/cfsharp/blob/[^/]+/artifacts/docs/workspace/index\.md/#L',
+            'https://github.com/mirrorpulse/cfsharp/blob/main/README.md#L')
         $rewritten = [regex]::Replace(
             $rewritten,
-            'https://github\.com/MirrorPulse/CfSharp/blob/[^/]+/artifacts/docs/workspace/articles/',
-            'https://github.com/MirrorPulse/CfSharp/blob/main/docs/')
+            'https://github\.com/mirrorpulse/cfsharp/blob/[^/]+/artifacts/docs/workspace/articles/',
+            'https://github.com/mirrorpulse/cfsharp/blob/main/docs/')
         $rewritten = $rewritten.Replace('.md/#L', '.md#L')
 
         # The modern template does not load a custom public/main.js by itself.

@@ -32,8 +32,8 @@ CfSharp package exists on NuGet.org.
 
 Before the first run, configure the NuGet trusted-publishing policy with:
 
-- Repository owner: `MirrorPulse`;
-- Repository: `CfSharp`;
+- Repository owner: `mirrorpulse`;
+- Repository: `cfsharp`;
 - Workflow file: `preview.yml`;
 - Environment: `preview`;
 - GitHub Actions secret `NUGET_USER`: the NuGet profile name, not an email address.

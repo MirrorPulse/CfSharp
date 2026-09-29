@@ -90,7 +90,7 @@ jobs:
           $encodedCredentials = [Convert]::ToBase64String($credentialBytes)
           $authHeader = "AUTHORIZATION: basic $encodedCredentials"
           try {
-              git -c "http.extraheader=$authHeader" clone --depth 1 --branch main https://github.com/MirrorPulse/mirrorpulse.github.io.git $pagesRoot
+              git -c "http.extraheader=$authHeader" clone --depth 1 --branch main https://github.com/mirrorpulse/mirrorpulse.github.io.git $pagesRoot
               if ($LASTEXITCODE -ne 0) {
                   throw "Pages repository clone failed with exit code $LASTEXITCODE."
               }

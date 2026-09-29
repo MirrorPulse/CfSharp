@@ -425,6 +425,17 @@ public sealed partial class CloudFileSystem
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
+        if (change.Kind is CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert)
+        {
+            RemoteCreationIntent? pending = await ReadRemoteCreationIntentAsync(change, cancellationToken)
+                .ConfigureAwait(false);
+            if (pending is not null)
+            {
+                return await CreateRemotePlaceholderCoordinatedAsync(change, pending.Identity.ItemId,
+                    options, pending, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         RemoteEntryContext context = await ReadRemoteEntryContextAsync(change, cancellationToken)
             .ConfigureAwait(false);
         if (change.Kind is CloudRemoteChangeKind.Move)
@@ -552,6 +563,12 @@ public sealed partial class CloudFileSystem
                 change,
                 context.LocalState,
                 CloudRemoteConflictReason.MissingItem));
+        }
+
+        if (upsert && (context.LocalState is null || !localExists))
+        {
+            return await CreateRemotePlaceholderCoordinatedAsync(change, itemId, options, pending: null,
+                cancellationToken).ConfigureAwait(false);
         }
 
         // Register suppression only after all conflict checks that can return
@@ -1121,6 +1138,8 @@ public sealed partial class CloudFileSystem
             batch.Fingerprint,
             change.ChangeId);
         await transaction.RemoteBatches.UpsertAsync(next, cancellationToken).ConfigureAwait(false);
+        await transaction.Checkpoints.RemoveAsync(RemoteCreationIntent.Name(change), cancellationToken)
+            .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return next;
     }

@@ -425,6 +425,17 @@ public sealed partial class CloudFileSystem
         CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
+        if (change.Kind is CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert)
+        {
+            RemoteCreationIntent? pending = await ReadRemoteCreationIntentAsync(change, cancellationToken)
+                .ConfigureAwait(false);
+            if (pending is not null)
+            {
+                return await CreateRemotePlaceholderCoordinatedAsync(change, pending.Identity.ItemId,
+                    options, pending, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         RemoteEntryContext context = await ReadRemoteEntryContextAsync(change, cancellationToken)
             .ConfigureAwait(false);
         if (change.Kind is CloudRemoteChangeKind.Move)
@@ -554,6 +565,12 @@ public sealed partial class CloudFileSystem
                 CloudRemoteConflictReason.MissingItem));
         }
 
+        if (upsert && (context.LocalState is null || !localExists))
+        {
+            return await CreateRemotePlaceholderCoordinatedAsync(change, itemId, options, pending: null,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         // Register suppression only after all conflict checks that can return
         // without mutating the namespace. A conflict must not leave behind a
         // record that could consume an unrelated future local observation.
@@ -578,7 +595,7 @@ public sealed partial class CloudFileSystem
             }
             else
             {
-                await UpdateRemotePlaceholderAsync(change, context.LocalState!, cancellationToken)
+                await UpdateRemotePlaceholderAsync(change, context.LocalState!, options, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -1023,6 +1040,7 @@ public sealed partial class CloudFileSystem
     private async ValueTask UpdateRemotePlaceholderAsync(
         CloudRemoteChange change,
         CloudItemState localState,
+        CloudRemoteApplyOptions options,
         CancellationToken cancellationToken)
     {
         CloudPlaceholderIdentity identity = new(
@@ -1035,7 +1053,26 @@ public sealed partial class CloudFileSystem
             .WithInSyncState(true);
         if (change.Kind is CloudRemoteChangeKind.FileUpsert)
         {
+            // Changing the identity alone leaves hydrated ranges readable as the old
+            // revision. Invalidate them atomically with the new identity and metadata.
+            // Windows rejects dehydration when pin/content policy forbids it; do not
+            // silently unpin the file or publish a revision with stale cached bytes.
             builder.WithFileSize(change.Length!.Value);
+            if (change.Length.Value != 0)
+            {
+                builder.WithFullDehydration();
+            }
+            else
+            {
+                // The default native metadata filter skips zero-valued fields on some
+                // supported builds. Pass through the explicit zero length to truncate.
+                builder.WithMetadata(change.Metadata!, CloudMetadataWriteMode.PassThrough);
+            }
+        }
+
+        if (options.PreserveUnsynchronizedLocalContent)
+        {
+            builder.WithInSyncVerification();
         }
 
         CloudItem item = CreateItemReference(change.RelativePath, change.ItemKind);
@@ -1163,6 +1200,8 @@ public sealed partial class CloudFileSystem
             batch.Fingerprint,
             change.ChangeId);
         await transaction.RemoteBatches.UpsertAsync(next, cancellationToken).ConfigureAwait(false);
+        await transaction.Checkpoints.RemoveAsync(RemoteCreationIntent.Name(change), cancellationToken)
+            .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return next;
     }
@@ -1218,6 +1257,17 @@ public sealed partial class CloudFileSystem
             throw new KeyNotFoundException($"Remote conflict '{conflictId}' was not found.");
         }
 
+        CloudRemoteConflict conflict = await DecodeRemoteConflictAsync(
+            durableState, transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+        return (conflict, durableState);
+    }
+
+    private static async ValueTask<CloudRemoteConflict> DecodeRemoteConflictAsync(
+        CloudConflictState durableState,
+        ICloudStateTransaction transaction,
+        CancellationToken cancellationToken)
+    {
         CloudRemoteChange change;
         CloudRemoteConflictReason reason;
         try
@@ -1276,8 +1326,7 @@ public sealed partial class CloudFileSystem
             ? await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false)
             : null;
         CloudRemoteConflict conflict = new(change, localState, reason, durableState.CreatedAt);
-        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-        return (conflict, durableState);
+        return conflict;
     }
 
     private static CloudPlaceholderMetadata? DecodeMetadata(RemoteMetadataEnvelope? metadata)

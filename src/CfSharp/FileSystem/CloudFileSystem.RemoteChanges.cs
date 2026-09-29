@@ -1195,6 +1195,17 @@ public sealed partial class CloudFileSystem
             throw new KeyNotFoundException($"Remote conflict '{conflictId}' was not found.");
         }
 
+        CloudRemoteConflict conflict = await DecodeRemoteConflictAsync(
+            durableState, transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+        return (conflict, durableState);
+    }
+
+    private static async ValueTask<CloudRemoteConflict> DecodeRemoteConflictAsync(
+        CloudConflictState durableState,
+        ICloudStateTransaction transaction,
+        CancellationToken cancellationToken)
+    {
         CloudRemoteChange change;
         CloudRemoteConflictReason reason;
         try
@@ -1253,8 +1264,7 @@ public sealed partial class CloudFileSystem
             ? await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false)
             : null;
         CloudRemoteConflict conflict = new(change, localState, reason, durableState.CreatedAt);
-        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-        return (conflict, durableState);
+        return conflict;
     }
 
     private static CloudPlaceholderMetadata? DecodeMetadata(RemoteMetadataEnvelope? metadata)

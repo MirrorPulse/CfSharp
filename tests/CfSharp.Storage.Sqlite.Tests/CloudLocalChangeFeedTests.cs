@@ -221,18 +221,36 @@ public sealed class CloudLocalChangeFeedTests : IAsyncLifetime
         Assert.True(overflow.RequiresFullRescan);
     }
 
-    [Fact]
-    public async Task DuplicateNotificationsAreCoalescedUntilAcknowledgement()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AcknowledgingDeliveredSnapshotPreservesLaterObservations(
+        bool initiallyCreated)
     {
         await using ICloudStateStore store = await OpenStoreAsync();
         FakeSource source = new();
-        await using CloudLocalChangeFeed feed = CreateFeed(store, source);
-        await feed.StartAsync();
+        Guid laterOperation;
+        await using (CloudLocalChangeFeed feed = CreateFeed(store, source))
+        {
+            await feed.StartAsync();
+            await source.EmitAsync(new(initiallyCreated ? LocalChangeSourceAction.Created : LocalChangeSourceAction.Modified, "same.txt"));
+            CloudLocalChange delivered = Assert.Single((await feed.ReadBatchAsync()).Changes);
 
-        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "same.txt"));
-        await source.EmitAsync(new(LocalChangeSourceAction.Modified, "same.txt"));
-        CloudLocalChangeBatch batch = await feed.ReadBatchAsync();
-        Assert.Single(batch.Changes);
+            await source.EmitAsync(new(LocalChangeSourceAction.Modified, "same.txt"));
+            await WaitForJournalStateAsync(store, expectedOperations: 2, expectedSuppressions: 0);
+            await feed.AcknowledgeAsync([delivered.OperationId]);
+            CloudLocalChange later = Assert.Single((await feed.ReadBatchAsync()).Changes);
+            Assert.NotEqual(delivered.OperationId, later.OperationId);
+            Assert.Equal(CloudLocalChangeKind.ContentUpdate, later.Kind);
+            laterOperation = later.OperationId;
+            await feed.AcknowledgeAsync([delivered.OperationId]);
+        }
+
+        await using CloudLocalChangeFeed restarted = CreateFeed(store, new FakeSource());
+        await restarted.StartAsync();
+        Assert.Equal(laterOperation, Assert.Single((await restarted.ReadBatchAsync()).Changes).OperationId);
+        await restarted.AcknowledgeAsync([laterOperation]);
+        await WaitForJournalStateAsync(store, expectedOperations: 0, expectedSuppressions: 0);
     }
 
     [Fact]

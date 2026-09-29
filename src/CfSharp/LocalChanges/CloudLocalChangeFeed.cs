@@ -694,53 +694,9 @@ public sealed class CloudLocalChangeFeed : IDisposable, IAsyncDisposable
             return;
         }
 
-        IReadOnlyList<CloudOperationJournalEntry> pendingOperations = observedState is not null
-            ? await transaction.Operations
-                .ListByItemIdAsync(observedState.ItemId, int.MaxValue, cancellationToken)
-                .ConfigureAwait(false)
-            : await transaction.Operations.ListAsync(4096, cancellationToken).ConfigureAwait(false);
-        bool alreadyPending = pendingOperations.Any(operation =>
-        {
-            bool compatibleKind = operation.Kind == operationKind ||
-                (operation.Kind == CloudStateOperationKind.Create &&
-                 operationKind is CloudStateOperationKind.ContentUpdate or CloudStateOperationKind.MetadataUpdate) ||
-                (operation.Kind == CloudStateOperationKind.Move &&
-                 operationKind is CloudStateOperationKind.ContentUpdate or CloudStateOperationKind.MetadataUpdate);
-            if (!compatibleKind)
-            {
-                return false;
-            }
-
-            try
-            {
-                LocalChangePayload pendingPayload = LocalChangePayload.Decode(operation.Payload);
-                return string.Equals(
-                        pendingPayload.RelativePath,
-                        path.RelativePath,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(
-                        pendingPayload.PreviousRelativePath,
-                        previousPath?.RelativePath,
-                        StringComparison.OrdinalIgnoreCase);
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
-        });
-        if (alreadyPending)
-        {
-            await UpsertCheckpointAsync(
-                transaction,
-                observation,
-                checkpoint.RequiresFullRescan,
-                observedAt,
-                cancellationToken).ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            SignalAvailable();
-            return;
-        }
-
+        // A pending operation may already be in an uploader's hands. Each subsequent
+        // observation needs its own acknowledgement identity; otherwise acknowledging the
+        // earlier snapshot would also erase changes made while that snapshot was uploading.
         CloudItemState? state = kind == CloudLocalChangeKind.Delete
             ? current
             : previous ?? current;

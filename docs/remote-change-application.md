@@ -36,7 +36,10 @@ Remote file upserts carry metadata and length. A configured content provider hyd
 response to Windows demand. Keep authentication tokens, transport cursors, and remote business
 payloads in application-owned storage rather than the CfSharp state database.
 
-### Keeping local content and closing a conflict
+### Cached content during file upserts
+
+File upserts atomically invalidate hydrated ranges when replacing the placeholder identity and metadata. Subsequent reads obtain the new revision from the content provider. Metadata-only changes retain cached content. The default preservation policy also verifies in-sync state in the native update. If Windows rejects invalidation (for example, a pinned or always-full file), the entry fails with its native error and the durable revision does not advance; CfSharp does not silently change pin or root policies.
+`r`n### Keeping local content and closing a conflict
 
 `KeepLocal` and `Defer` continue to leave the conflict unresolved. To explicitly close an individual persistent conflict without changing local content, call `DismissRemoteConflictAsync(conflictId)`. `Dismissed` means the unresolved record and a durable receipt were atomically updated. A retry, including after restart, returns `AlreadyDismissed`. `NotFound` means no active record or dismissal receipt exists; it is not proof of successful resolution by another action.
 
@@ -48,4 +51,5 @@ New file and directory upserts prepare a durable creation intent before touching
 The local feed retains observations made during an uncommitted creation separately and reports `RequiresFullRescan` before delivering upload candidates. Replay the remote operation first, then reconcile the root and acknowledge the rescan. A rescan acknowledgement cannot discard a still-pending creation. Ordinary subsequent local edits are not suppressed when native state is out of sync. Native creation and the database are not one atomic resource; failures retain recovery evidence and never advance the batch cursor prematurely.
 
 The official SQLite store upgrades to schema 5 to prevent older versions from ignoring this recovery protocol. Do not downgrade an upgraded database. Custom transactional stores remain supported using existing repositories, but all accessing runtimes must use the new protocol version together. Creation transactions contain a synchronous placeholder creation, not hydration or application callbacks.
+
 

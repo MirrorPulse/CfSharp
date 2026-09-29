@@ -818,6 +818,18 @@ public sealed partial class CloudFileSystem
                 CloudRemoteConflictReason.Delete));
         }
 
+        IReadOnlyList<RecursiveItemEntry>? protectedTree = null;
+        if (options.PreserveUnsynchronizedLocalContent && item is CloudDirectory protectedDirectory)
+        {
+            protectedTree = MaterializeLocalTree(protectedDirectory, childrenFirst: true, includeRoot: true);
+            if (!await CanDeleteRemoteTreeAsync(protectedTree, localState.RelativePath, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                return RemoteEntryOutcome.ConflictResult(CreateConflict(
+                    change, localState, CloudRemoteConflictReason.Delete));
+            }
+        }
+
         Guid? suppressionId = null;
         if (options.SuppressLocalEcho)
         {
@@ -834,14 +846,44 @@ public sealed partial class CloudFileSystem
         {
             try
             {
-                CloudRecursiveOperationResult result = await directory.DeleteTreeAsync(
-                        new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (!result.IsSuccessful)
+                if (protectedTree is not null)
                 {
-                    throw result.Entries.First(entry => entry.Error is not null).Error!;
+                    // Delete only the preflighted entries. A new child must not be picked up
+                    // by a second recursive enumeration and deleted without validation.
+                    foreach (RecursiveItemEntry entry in protectedTree)
+                    {
+                        if (!await CanDeleteRemoteTreeAsync([entry], entry.RelativePath, cancellationToken)
+                            .ConfigureAwait(false))
+                        {
+                            if (suppressionId is Guid registeredId)
+                            {
+                                await RemoveRemoteEchoSuppressionAsync(registeredId).ConfigureAwait(false);
+                            }
+
+                            // Earlier descendants may already have been deleted. Preserve the
+                            // remote batch cursor and retry evidence instead of recording a
+                            // terminal conflict that would make the partially applied delete
+                            // invisible to recovery.
+                            throw new IOException(
+                                $"The local subtree changed while deleting remote directory '{change.RelativePath}'.");
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                        DeleteLocalItem(entry.FullPath, entry.Kind, "CloudFileSystem.ApplyRemoteDelete");
+                        await PersistTombstoneAsync(_stateStore!, entry.RelativePath, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    CloudRecursiveOperationResult result = await directory.DeleteTreeAsync(
+                            new CloudRecursiveOperationOptions(includeRoot: true, stopOnFirstFailure: true),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!result.IsSuccessful)
+                    {
+                        throw result.Entries.First(entry => entry.Error is not null).Error!;
+                    }
                 }
             }
             catch

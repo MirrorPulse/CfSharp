@@ -35,3 +35,7 @@ separate and side-effect free. Neither view performs hidden remote network acces
 Remote file upserts carry metadata and length. A configured content provider hydrates bytes later in
 response to Windows demand. Keep authentication tokens, transport cursors, and remote business
 payloads in application-owned storage rather than the CfSharp state database.
+
+### Cached content during file upserts
+
+File upserts atomically invalidate hydrated ranges when replacing the placeholder identity and metadata. Subsequent reads obtain the new revision from the content provider. Metadata-only changes retain cached content. The default preservation policy also verifies in-sync state in the native update. If Windows rejects invalidation (for example, a pinned or always-full file), the entry fails with its native error and the durable revision does not advance; CfSharp does not silently change pin or root policies.

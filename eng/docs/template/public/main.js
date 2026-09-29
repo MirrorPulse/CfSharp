@@ -45,7 +45,7 @@ function startNavigationRepair() {
 function createGitHubLink() {
   const link = document.createElement('a')
   link.className = 'cf-github-link nav-link'
-  link.href = 'https://github.com/MirrorPulse/CfSharp'
+  link.href = 'https://github.com/mirrorpulse/cfsharp'
   link.target = '_blank'
   link.rel = 'noopener noreferrer'
   link.setAttribute('aria-label', 'CfSharp on GitHub')

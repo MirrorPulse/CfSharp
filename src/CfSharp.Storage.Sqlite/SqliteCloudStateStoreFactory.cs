@@ -777,7 +777,7 @@ internal sealed class SqlitePathHandleLease : IDisposable
 
 internal static class SqliteSchema
 {
-    internal const int CurrentVersion = 4;
+    internal const int CurrentVersion = 5;
     internal const string PathCollationName = "CFSHARP_UNICODE_NOCASE";
 
     internal static async Task InitializeAsync(
@@ -857,6 +857,15 @@ internal static class SqliteSchema
             {
                 await MigrateVersionFourAsync(connection, cancellationToken)
                     .ConfigureAwait(false);
+            }
+
+            if (version < 5)
+            {
+                // Version 5 fences the durable creation/reconciliation protocol even though
+                // its records use existing tables. Older runtimes must not ignore them.
+                await using SqliteCommand upgrade = connection.CreateCommand();
+                upgrade.CommandText = "UPDATE cfsharp_schema SET version = 5 WHERE singleton = 1;";
+                await upgrade.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
             await ValidateCurrentVersionAsync(

@@ -10,7 +10,7 @@ CfSharp follows the repository rules in `AGENTS.md` and `CONTRIBUTING.md`. The s
 
 Main-bound changes must come from `develop`, pass all protected checks, and carry exactly one of
 the `breaking`, `feature`, or `fix` labels. Use private GitHub Security Advisories for
-undisclosed vulnerabilities; see the repository [security policy](https://github.com/MirrorPulse/CfSharp/blob/develop/SECURITY.md).
+undisclosed vulnerabilities; see the repository [security policy](https://github.com/mirrorpulse/cfsharp/blob/develop/SECURITY.md).
 
 ## Editing a guide
 

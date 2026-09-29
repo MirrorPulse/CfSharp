@@ -34,3 +34,7 @@ replay. Do not repair the file by deleting the WAL or by replacing the database 
 Applications that need another database can implement `ICloudStateStoreFactory`,
 `ICloudStateStore`, and `ICloudStateTransaction`. Preserve the same commit, rollback, ownership,
 checkpoint, and retry semantics; the high-level API does not require SQLite.
+
+### Schema 5 recovery fence
+
+Schema 5 preserves the existing table layout and data while fencing the remote placeholder creation and observation-reconciliation protocol. Versions 0 through 4 upgrade in place. Older libraries reject the newer version rather than ignore pending creation records. Do not downgrade the schema number manually. Back up state before upgrading and use matching core and SQLite packages.

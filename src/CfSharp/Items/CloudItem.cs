@@ -71,6 +71,50 @@ public abstract partial class CloudItem
         CancellationToken cancellationToken = default) =>
         _owner.InspectAsync(this, cancellationToken);
 
+    /// <summary>Reads this file or directory's current file-system update sequence number (USN).</summary>
+    /// <param name="cancellationToken">
+    /// Token observed while acquiring the operation lease and before the synchronous Windows query.
+    /// </param>
+    /// <returns>
+    /// The last USN recorded by Windows for the item. A zero value is unavailable for conditional
+    /// synchronization; only a positive value may be used with <see cref="CloudInSyncChangeOptions"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// On Windows 10 version 1709 or later, this uses <c>FSCTL_READ_FILE_USN_DATA</c> on an
+    /// attribute-only handle. It supports ordinary items and Cloud Files placeholders, does not
+    /// hydrate content, and closes the handle before returning. The file system must support USN
+    /// queries (NTFS or ReFS); unavailable journals and native failures are not silently replaced
+    /// with unconditional synchronization. No journal is created or modified by this query.
+    /// </para>
+    /// <para>
+    /// The owning file system must remain started. Calls participate in its operation coordination
+    /// and may be made concurrently, but the returned observation does not lock out external writers
+    /// or identify a content hash. Read a positive USN before verifying uploaded content, close any
+    /// verification streams, and pass that same USN to <see cref="SetInSyncAsync"/>. If verification
+    /// or the USN condition fails, reconcile and retry; never fall back to an unconditional mark.
+    /// Tokens are scoped to the same existing item and current volume journal, not durable versions
+    /// across deletion, replacement, or journal recreation. This reference remains path-bound.
+    /// A positive file-system USN does not guarantee that the installed Cloud Files platform will
+    /// accept a conditional mark; some Windows builds reject even a freshly verified token with
+    /// <c>ERROR_CLOUD_FILE_NOT_IN_SYNC</c>. That native failure remains visible to the caller.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The owning file system has not started, the item has another kind, or it is a non-Cloud Files
+    /// reparse point.
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The owning file system is stopping or disposed.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was requested before the query.</exception>
+    /// <exception cref="CloudFilesException">
+    /// Windows cannot open or query the item, including missing items, access denial, or an
+    /// unsupported or unavailable journal. The original Win32 error is preserved as an HRESULT.
+    /// </exception>
+    /// <exception cref="InvalidDataException">Windows returned a malformed or truncated USN record.</exception>
+    /// <exception cref="NotSupportedException">Windows returned an unsupported USN record version.</exception>
+    public ValueTask<long> ReadUsnAsync(CancellationToken cancellationToken = default) =>
+        _owner.ReadUsnAsync(this, cancellationToken);
+
     /// <inheritdoc/>
     public override string ToString() => FullPath;
 }

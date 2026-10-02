@@ -26,6 +26,11 @@ public sealed class CloudPlaceholderMutationResult
     public string Path { get; }
 
     /// <summary>Gets the final USN returned by Windows, when the native operation supplies one.</summary>
+    /// <remarks>
+    /// The native value is preserved, including zero after a successful mutation. Zero cannot be
+    /// used as a conditional token. Use <see cref="CloudItem.ReadUsnAsync"/> before independently
+    /// verifying content when a fresh positive USN is required.
+    /// </remarks>
     public long? OperationUsn { get; }
 
     /// <summary>Gets a fresh handle-free snapshot captured after the operation.</summary>
@@ -54,6 +59,10 @@ public sealed class CloudStateChangeResult
     public string Path { get; }
 
     /// <summary>Gets the final USN returned by Windows, when available.</summary>
+    /// <remarks>
+    /// Windows may return zero after success. This is not a conditional token; use
+    /// <see cref="CloudItem.ReadUsnAsync"/> before verifying content and conditionally marking in sync.
+    /// </remarks>
     public long? OperationUsn { get; }
 
     /// <summary>Gets a fresh handle-free snapshot captured after the change.</summary>

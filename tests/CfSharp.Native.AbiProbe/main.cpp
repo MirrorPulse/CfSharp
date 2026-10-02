@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <winioctl.h>
 #include <winternl.h>
 #include <cfapi.h>
 
@@ -13,6 +14,13 @@ int main()
     // Windows SDK. Managed tests will compare these values with the bindings.
     std::cout << "{\n"
               << "  \"pointerSize\": " << sizeof(void*) << ",\n"
+              << "  \"readFileUsnDataControlCode\": " << FSCTL_READ_FILE_USN_DATA << ",\n"
+              << "  \"readFileUsnDataSize\": " << sizeof(READ_FILE_USN_DATA) << ",\n"
+              << "  \"readFileUsnDataMaxMajorVersionOffset\": " << offsetof(READ_FILE_USN_DATA, MaxMajorVersion) << ",\n"
+              << "  \"usnRecordV2UsnOffset\": " << offsetof(USN_RECORD_V2, Usn) << ",\n"
+              << "  \"usnRecordV3UsnOffset\": " << offsetof(USN_RECORD_V3, Usn) << ",\n"
+              << "  \"usnRecordV2HeaderLength\": " << offsetof(USN_RECORD_V2, FileName) << ",\n"
+              << "  \"usnRecordV3HeaderLength\": " << offsetof(USN_RECORD_V3, FileName) << ",\n"
               << "  \"cfEndOfFile\": " << CF_EOF << ",\n"
               << "  \"cfDefaultRequestKey\": " << CF_REQUEST_KEY_DEFAULT << ",\n"
               << "  \"cfMaxFileIdentityLength\": " << CF_PLACEHOLDER_MAX_FILE_IDENTITY_LENGTH << ",\n"

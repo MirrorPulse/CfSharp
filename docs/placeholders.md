@@ -93,13 +93,10 @@ deletion, path replacement, or journal recreation. Providers must coordinate tho
 events separately. The operation lease serializes CfSharp calls, not external writers.
 
 Reading a positive file-system USN does not guarantee that the installed Cloud Files platform will
-accept it. The CF-002 fixture on Windows build 10.0.26300.0 (ARM64) rejects an unchanged, freshly
-verified token with `0x80070179` (`ERROR_CLOUD_FILE_NOT_IN_SYNC`), including direct native calls
-that read the USN and mark on the same handle. Both `TrackAll` and `None` policies reproduce the
-rejection. The required `CurrentUsnMustSupportVerifiedConditionalInSync` integration test retains
-the successful conditional-mark assertion and fails on this platform; the read API alone does not
-close CF-002 or the consuming provider's rescan acceptance. Keep pending work until that acceptance
-passes on the target Windows build. See the [CF-002 investigation](cf002-usn.md).
+accept it. Some Windows builds reject even an unchanged, verified token with `0x80070179`
+(`ERROR_CLOUD_FILE_NOT_IN_SYNC`). CfSharp preserves this native failure. Verify successful
+conditional confirmation on the target platform before relying on it in a provider's acceptance
+tests; the read API alone does not establish that capability.
 
 ## Provider responsibility
 

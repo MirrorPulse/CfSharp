@@ -874,6 +874,7 @@
       "method System.Threading.Tasks.ValueTask\u003CCfSharp.CloudPlaceholderMutationResult\u003E UpdatePlaceholderAsync(CfSharp.CloudPlaceholderPatch patch,System.Threading.CancellationToken cancellationToken)",
       "method System.Threading.Tasks.ValueTask\u003CCfSharp.CloudStateChangeResult\u003E SetInSyncAsync(System.Boolean inSync,CfSharp.CloudInSyncChangeOptions options,System.Threading.CancellationToken cancellationToken)",
       "method System.Threading.Tasks.ValueTask\u003CCfSharp.CloudStateChangeResult\u003E SetPinStateAsync(CfSharp.CloudPinTarget target,System.Threading.CancellationToken cancellationToken)",
+      "method System.Threading.Tasks.ValueTask\u003CSystem.Int64\u003E ReadUsnAsync(System.Threading.CancellationToken cancellationToken)",
       "property System.String FullPath()",
       "property CfSharp.CloudItemKind Kind()",
       "property System.String Name()",

@@ -32,6 +32,13 @@ public sealed class AbiProbeComparisonTests
         JsonElement probe = document.RootElement;
 
         AssertProbe(probe, "pointerSize", IntPtr.Size);
+        AssertProbe(probe, "readFileUsnDataControlCode", WindowsFileUsn.ReadFileUsnDataControlCode);
+        AssertProbe(probe, "readFileUsnDataSize", Marshal.SizeOf<WindowsFileUsn.ReadFileUsnData>());
+        AssertOffset<WindowsFileUsn.ReadFileUsnData>(probe, "readFileUsnDataMaxMajorVersionOffset", "MaxMajorVersion");
+        AssertProbe(probe, "usnRecordV2UsnOffset", WindowsFileUsn.Version2UsnOffset);
+        AssertProbe(probe, "usnRecordV3UsnOffset", WindowsFileUsn.Version3UsnOffset);
+        AssertProbe(probe, "usnRecordV2HeaderLength", WindowsFileUsn.Version2HeaderLength);
+        AssertProbe(probe, "usnRecordV3HeaderLength", WindowsFileUsn.Version3HeaderLength);
         AssertProbe(probe, "cfEndOfFile", CfApi.EndOfFile);
         AssertProbe(probe, "cfDefaultRequestKey", CfApi.DefaultRequestKey);
         AssertProbe(probe, "cfMaxFileIdentityLength", CfApi.MaxFileIdentityLength);

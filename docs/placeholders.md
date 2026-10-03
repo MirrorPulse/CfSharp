@@ -42,6 +42,62 @@ content. Placeholder patches can condition a change on the observed USN. Move an
 keep immutable path references and update durable descendants only after the file-system operation
 succeeds.
 
+## Conditional in-sync confirmation
+
+`OperationUsn` preserves the value returned by the Cloud Files mutation. Windows can successfully
+convert, update, or set the in-sync state while returning zero. Zero is not a conditional token:
+[`CfSetInSyncState`](https://learn.microsoft.com/windows/win32/api/cfapi/nf-cfapi-cfsetinsyncstate)
+treats an input USN of zero as an unconditional operation. CfSharp rejects zero in
+`CloudInSyncChangeOptions` and `CloudPlaceholderPatch.Builder.WithExpectedUsn`.
+
+Use `CloudItem.ReadUsnAsync` to query the last file-system USN through
+[`FSCTL_READ_FILE_USN_DATA`](https://learn.microsoft.com/windows/win32/api/winioctl/ni-winioctl-fsctl_read_file_usn_data).
+This attribute-only query supports ordinary files, directories, and Cloud Files placeholders on
+NTFS or ReFS. It closes its handle before returning and does not hydrate content, create a journal,
+or modify durable state. Native failures preserve their Win32 error as a `CloudFilesException`
+HRESULT; a successful zero result remains unusable for a conditional mark.
+
+After remote acceptance, obtain a positive token **before** independently verifying that the local
+content still matches the accepted upload. Close verification streams, then pass the same token to
+the conditional mark. Reading a fresh token only after hashing could confirm a later, unverified
+change. For example, with `acceptedHash` from the uploaded content:
+
+```csharp
+long observedUsn = await file.ReadUsnAsync(cancellationToken);
+if (observedUsn <= 0)
+{
+    throw new InvalidOperationException("A positive USN is required for conditional confirmation.");
+}
+
+byte[] currentHash;
+await using (FileStream stream = File.OpenRead(file.FullPath))
+{
+    currentHash = await System.Security.Cryptography.SHA256.HashDataAsync(stream, cancellationToken);
+}
+
+if (!currentHash.AsSpan().SequenceEqual(acceptedHash))
+{
+    throw new InvalidOperationException("The local content no longer matches the accepted upload.");
+}
+
+await file.SetInSyncAsync(
+    true,
+    new CloudInSyncChangeOptions(observedUsn),
+    cancellationToken);
+```
+
+On verification failure, unavailable tokens, or a rejected USN condition, retain pending work and
+reconcile. Do not retry with an unconditional mark. A USN is an observation of the same existing
+item within the current volume journal; it is not a content hash or a durable identity across
+deletion, path replacement, or journal recreation. Providers must coordinate those lifecycle
+events separately. The operation lease serializes CfSharp calls, not external writers.
+
+Reading a positive file-system USN does not guarantee that the installed Cloud Files platform will
+accept it. Some Windows builds reject even an unchanged, verified token with `0x80070179`
+(`ERROR_CLOUD_FILE_NOT_IN_SYNC`). CfSharp preserves this native failure. Verify successful
+conditional confirmation on the target platform before relying on it in a provider's acceptance
+tests; the read API alone does not establish that capability.
+
 ## Provider responsibility
 
 CfSharp coordinates the Windows demand callback and durable state; the application supplies content

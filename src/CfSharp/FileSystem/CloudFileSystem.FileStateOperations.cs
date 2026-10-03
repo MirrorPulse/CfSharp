@@ -1,3 +1,7 @@
+using System.ComponentModel;
+
+using CfSharp.Native;
+
 namespace CfSharp;
 
 public sealed partial class CloudFileSystem
@@ -16,6 +20,23 @@ public sealed partial class CloudFileSystem
         TimeSpan.FromMilliseconds(100),
         TimeSpan.FromMilliseconds(200),
     ];
+
+    internal async ValueTask<long> ReadUsnAsync(CloudItem item, CancellationToken cancellationToken)
+    {
+        using CloudFileSystemOperationLease operation = await AcquireOperationAsync(
+            [CloudItemOperationScope.Exact(item.FullPath)],
+            cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            return WindowsFileUsn.Read(item.FullPath, item.Kind is CloudItemKind.Directory);
+        }
+        catch (Win32Exception exception)
+        {
+            int hresult = unchecked((int)(0x80070000u | ((uint)exception.NativeErrorCode & 0xffff)));
+            throw CloudFilesException.FromHResult("CloudItem.ReadUsn", item.FullPath, hresult);
+        }
+    }
 
     internal async ValueTask<CloudStateChangeResult> SetPinStateAsync(
         CloudItem item,
